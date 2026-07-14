@@ -1,0 +1,35 @@
+// Mirrors the 7-stage order in app/services/analysis/pipeline.py::run_analysis
+// (set_stage() calls) -- kept here rather than fetched from the API since the
+// backend doesn't expose stage position, only the current stage name.
+// Was 11 stages; regulatory/coverage/payment/billing/marketing analysis
+// were merged into one "domain_analysis" call as a cost optimization
+// (see docs/data-model.md).
+const ANALYSIS_STAGE_ORDER = [
+  "input_audit",
+  "product_fact_extraction",
+  "claim_extraction",
+  "coding_analysis",
+  "domain_analysis",
+  "synthesis",
+  "citation_audit",
+];
+
+const STAGE_LABELS: Record<string, string> = {
+  input_audit: "Input audit",
+  product_fact_extraction: "Product fact extraction",
+  claim_extraction: "Claim extraction",
+  coding_analysis: "Coding analysis",
+  domain_analysis: "Domain analysis",
+  synthesis: "Synthesis",
+  citation_audit: "Citation audit",
+};
+
+/** "synthesis" -> "Synthesis (6/7)". Falls back to the raw stage name for
+ * anything not in the stage list (e.g. "complete", "cancelled"), and to
+ * "starting…" when there's no stage yet. */
+export function formatAnalysisStage(stage: string | null | undefined): string {
+  if (!stage) return "starting…";
+  const index = ANALYSIS_STAGE_ORDER.indexOf(stage);
+  if (index === -1) return stage;
+  return `${STAGE_LABELS[stage] ?? stage} (${index + 1}/${ANALYSIS_STAGE_ORDER.length})`;
+}

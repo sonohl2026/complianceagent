@@ -1,0 +1,135 @@
+name: medtech-compliance-agent
+
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-development}
+  APP_NAME: ${APP_NAME:-MedTech Reimbursement Readiness Agent}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://medtech:change-me@postgres:5432/medtech_agent}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+  OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
+  OPENROUTER_EXTRACTION_MODEL: ${OPENROUTER_EXTRACTION_MODEL:-}
+  OPENROUTER_SYNTHESIS_MODEL: ${OPENROUTER_SYNTHESIS_MODEL:-}
+  OPENROUTER_CITATION_MODEL: ${OPENROUTER_CITATION_MODEL:-}
+  OPENROUTER_ZDR: ${OPENROUTER_ZDR:-true}
+  OPENROUTER_REQUIRE_PARAMETERS: ${OPENROUTER_REQUIRE_PARAMETERS:-true}
+  OPENROUTER_HTTP_REFERER: ${OPENROUTER_HTTP_REFERER:-http://localhost:3000}
+  OPENROUTER_APP_TITLE: ${OPENROUTER_APP_TITLE:-MedTech Reimbursement Readiness Agent}
+  LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+  EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cpu}
+  EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-16}
+  STORAGE_ROOT: /app/data/storage
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-100}
+  MAX_CRAWL_PAGES: ${MAX_CRAWL_PAGES:-250}
+  MAX_CRAWL_DEPTH: ${MAX_CRAWL_DEPTH:-4}
+  CRAWL_DELAY_MS: ${CRAWL_DELAY_MS:-750}
+  ALLOW_OCR: ${ALLOW_OCR:-false}
+  ALLOW_LAN_ACCESS: ${ALLOW_LAN_ACCESS:-false}
+  SECRET_KEY: ${SECRET_KEY:-replace-with-random-value}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  STORE_RAW_MODEL_RESPONSES: ${STORE_RAW_MODEL_RESPONSES:-true}
+  STORE_PROMPT_LOGS: ${STORE_PROMPT_LOGS:-true}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-medtech_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-medtech}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-medtech} -d ${POSTGRES_DB:-medtech_agent}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/migrations:/app/migrations
+      - ./prompts:/app/prompts
+      - ./scripts:/app/scripts
+      - ./data/storage:/app/data/storage
+    ports:
+      - "${APP_HOST:-127.0.0.1}:${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  worker:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+    volumes:
+      - ./backend/app:/app/app
+      - ./prompts:/app/prompts
+      - ./scripts:/app/scripts
+      - ./data/storage:/app/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=INFO"]
+
+  scheduler:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+    volumes:
+      - ./backend/app:/app/app
+      - ./prompts:/app/prompts
+      - ./scripts:/app/scripts
+      - ./data/storage:/app/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "app.workers.celery_app", "beat", "--loglevel=INFO"]
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+    ports:
+      - "${APP_HOST:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - api
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
+
+volumes:
+  postgres_data:
