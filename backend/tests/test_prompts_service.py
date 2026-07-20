@@ -36,5 +36,5 @@ def test_all_ten_module_prompts_load_without_error():
 def test_master_prompt_file_loads_and_strips_frontmatter():
     content = _read_master_prompt_file()
     assert not content.startswith("---")
-    assert "SonoHL Compliance Intelligence Agent" in content
+    assert "MedTech Reimbursement Readiness Agent" in content
     assert content.startswith("#")

@@ -7,6 +7,7 @@ Every finding a stage produces is persisted with citations resolved from the
 exact chunks retrieved for that stage -- never a bare, uncited claim.
 """
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
@@ -88,6 +89,12 @@ class StageContext:
     product: Product | None
     master_prompt: str
     model: str
+    """Default/fallback model, recorded on the analysis run for reporting.
+    Individual stages use extraction_model/synthesis_model/citation_model
+    below when those are configured, falling back to this one otherwise."""
+    extraction_model: str
+    synthesis_model: str
+    citation_model: str
     privacy: dict
     chunk_lookup: dict[str, RetrievedChunk]
     prior_outputs: dict
@@ -182,6 +189,7 @@ async def _call_stage(
     evidence_chunks: list[RetrievedChunk],
     schema_model,
     max_tokens: int = 8000,
+    model: str | None = None,
 ):
     schema = schema_model.model_json_schema()
     system_prompt, messages = compose_messages(
@@ -197,7 +205,7 @@ async def _call_stage(
         messages=messages,
         schema=schema,
         schema_name=stage_name,
-        model=ctx.model,
+        model=model or ctx.model,
         temperature=0,
         max_tokens=max_tokens,
     )
@@ -334,6 +342,22 @@ async def _retrieve_combined_domain_evidence(ctx: StageContext) -> list[Retrieve
     return list(seen.values())
 
 
+def _resolve_stage_models(model: str, privacy: dict) -> tuple[str, str, str]:
+    """Cost lever: input_audit/product_fact_extraction/claim_extraction/
+    coding_analysis/citation_audit are comparatively mechanical extraction
+    tasks -- a cheap/fast model handles them fine. domain_analysis and
+    synthesis are where the actual compliance reasoning happens, so they
+    stay on the stronger default model unless a synthesis-tier override is
+    set. Any tier left unset in Settings falls back to the one model
+    everyone already configures, so this is a no-op until the user opts in.
+    Returns (extraction_model, synthesis_model, citation_model)."""
+    return (
+        privacy.get("openrouter_extraction_model") or model,
+        privacy.get("openrouter_synthesis_model") or model,
+        privacy.get("openrouter_citation_model") or model,
+    )
+
+
 async def run_analysis(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMProvider, model: str) -> None:
     project = await db.get(Project, analysis_run.project_id)
     product = await db.get(Product, analysis_run.product_id) if analysis_run.product_id else None
@@ -345,6 +369,7 @@ async def run_analysis(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMProv
     await db.commit()
 
     privacy = load_runtime_settings()
+    extraction_model, synthesis_model, citation_model = _resolve_stage_models(model, privacy)
     ctx = StageContext(
         db=db,
         llm=llm,
@@ -353,6 +378,9 @@ async def run_analysis(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMProv
         product=product,
         master_prompt=master_prompt_version.content,
         model=model,
+        extraction_model=extraction_model,
+        synthesis_model=synthesis_model,
+        citation_model=citation_model,
         privacy=privacy,
         chunk_lookup={},
         prior_outputs={},
@@ -374,34 +402,57 @@ async def run_analysis(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMProv
     chunks = await _retrieve(ctx, "product overview intended use regulatory status evidence", top_k=15)
     input_audit, _ = await _call_stage(
         ctx, stage_name="input_audit", module_prompt=INPUT_AUDIT_MODULE_PROMPT,
-        evidence_chunks=chunks, schema_model=InputAuditResult,
+        evidence_chunks=chunks, schema_model=InputAuditResult, model=ctx.extraction_model,
     )
     ctx.prior_outputs["input_audit"] = input_audit.model_dump()
     await db.commit()
 
-    # Stage 2 — Product fact extraction
+    # Stage 2 — Product fact extraction. Includes THIRD_PARTY/COMPETITOR
+    # evidence, not just COMPANY: for a public-product evaluation (e.g. a
+    # competitor or an established third-party device), the only evidence
+    # available may be secondary literature rather than the company's own
+    # materials -- per the master prompt's neutrality rule, that's a
+    # legitimate Level 5 source to extract provisional facts from, not a
+    # reason to retrieve nothing and fall back to all-MISSING.
     await set_stage("product_fact_extraction")
     chunks = await _retrieve(
         ctx, "product components intended function hardware software specifications FDA status",
-        collection_types=[CollectionType.COMPANY], top_k=15,
+        collection_types=[CollectionType.COMPANY, CollectionType.THIRD_PARTY, CollectionType.COMPETITOR],
+        top_k=15,
     )
     facts, _ = await _call_stage(
         ctx, stage_name="product_fact_extraction", module_prompt=load_module_prompt("product_fact_extraction"),
-        evidence_chunks=chunks, schema_model=ProductFactExtractionResult,
+        evidence_chunks=chunks, schema_model=ProductFactExtractionResult, model=ctx.extraction_model,
     )
     ctx.prior_outputs["product_facts"] = facts.model_dump()
     await db.commit()
 
-    # Stage 3 — Claim extraction
-    await set_stage("claim_extraction")
-    chunks = await _retrieve(
+    # Stages 3-4 — Claim extraction and coding analysis. Both depend only on
+    # product_facts (already produced above), not on each other, so their
+    # LLM calls run concurrently to cut wall-clock time -- retrieval and DB
+    # writes stay strictly sequential on the shared session/connection
+    # (AsyncSession is not safe for concurrent use), only the two
+    # structured_completion network calls actually overlap.
+    await set_stage("claim_extraction_and_coding")
+    claim_chunks = await _retrieve(
         ctx, "website marketing claims performance safety effectiveness pricing availability",
         collection_types=[CollectionType.COMPANY], top_k=20,
     )
-    claims, _ = await _call_stage(
-        ctx, stage_name="claim_extraction", module_prompt=load_module_prompt("claim_extraction"),
-        evidence_chunks=chunks, schema_model=ClaimExtractionResult, max_tokens=12000,
+    coding_chunks = await _retrieve(ctx, "CPT HCPCS ICD coding billing code eligibility RPM RTM Category III device", top_k=15)
+
+    (claims, _), (coding_result, _) = await asyncio.gather(
+        _call_stage(
+            ctx, stage_name="claim_extraction", module_prompt=load_module_prompt("claim_extraction"),
+            evidence_chunks=claim_chunks, schema_model=ClaimExtractionResult, max_tokens=12000,
+            model=ctx.extraction_model,
+        ),
+        _call_stage(
+            ctx, stage_name="coding_analysis", module_prompt=load_module_prompt("coding_analysis"),
+            evidence_chunks=coding_chunks, schema_model=CodingEligibilityResult, max_tokens=12000,
+            model=ctx.extraction_model,
+        ),
     )
+
     ctx.prior_outputs["claims"] = claims.model_dump()
     for claim in claims.claims:
         source_chunk = ctx.chunk_lookup.get(claim.citation_labels[0]) if claim.citation_labels else None
@@ -424,13 +475,8 @@ async def run_analysis(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMProv
         )
     await db.commit()
 
-    # Stages 4-9 — domain analyses (regulatory, coding, coverage, payment, billing, marketing)
-    await set_stage("coding_analysis")
-    chunks = await _retrieve(ctx, "CPT HCPCS ICD coding billing code eligibility RPM RTM Category III device", top_k=15)
-    coding_result, _ = await _call_stage(
-        ctx, stage_name="coding_analysis", module_prompt=load_module_prompt("coding_analysis"),
-        evidence_chunks=chunks, schema_model=CodingEligibilityResult, max_tokens=12000,
-    )
+    # Stages 5-9 — domain analyses (regulatory, coverage, payment, billing, marketing).
+    # coding_analysis's own result (from the concurrent call above) is persisted here.
     ctx.prior_outputs["coding"] = coding_result.model_dump()
     for candidate_item in coding_result.candidates:
         candidate = CodingCandidate(
@@ -485,7 +531,7 @@ async def run_analysis(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMProv
     await set_stage("synthesis")
     synthesis, _ = await _call_stage(
         ctx, stage_name="synthesis", module_prompt=load_module_prompt("synthesis"),
-        evidence_chunks=[], schema_model=OverallAnalysisResult,
+        evidence_chunks=[], schema_model=OverallAnalysisResult, model=ctx.synthesis_model,
     )
     analysis_run.overall_verdict = _safe_enum(Verdict, synthesis.overall_verdict, Verdict.STOP)
     analysis_run.overall_risk = _safe_enum(RiskLevel, synthesis.overall_risk, RiskLevel.HIGH)
@@ -548,7 +594,7 @@ async def _run_citation_audit(ctx: StageContext) -> None:
     audit_prompt = load_module_prompt("citation_audit")
     audit_result, _ = await _call_stage(
         ctx, stage_name="citation_audit", module_prompt=audit_prompt,
-        evidence_chunks=[], schema_model=CitationAuditResult,
+        evidence_chunks=[], schema_model=CitationAuditResult, model=ctx.citation_model,
     )
 
     findings_by_title = {f.title: f for f in findings}

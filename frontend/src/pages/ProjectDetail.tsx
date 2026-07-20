@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "../api/client";
 import { ComplianceChecklist } from "../components/ComplianceChecklist";
 import { StatusBadge } from "../components/StatusBadge";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { CrawlPanel } from "./CrawlPanel";
-import type { Job, SourceDocument } from "../types/document";
+import type { CollectionType, Job, SourceDocument } from "../types/document";
 import type { Product, ProductCreate, Project } from "../types/project";
 import type { SearchResultChunk } from "../types/retrieval";
 
@@ -29,9 +29,11 @@ function useActiveJobPoll(jobId: string | null, onDone: () => void) {
 
 export function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const { data: project } = useQuery({
     queryKey: ["project", projectId],
@@ -67,10 +69,12 @@ export function ProjectDetail() {
     },
   });
 
+  const [uploadCollectionType, setUploadCollectionType] = useState<CollectionType>("COMPANY");
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("collection_type", uploadCollectionType);
       const response = await fetch(
         `${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1"}/projects/${projectId}/documents`,
         { method: "POST", body: formData },
@@ -84,6 +88,11 @@ export function ProjectDetail() {
     },
   });
 
+  const deleteProject = useMutation({
+    mutationFn: () => api.del(`/projects/${projectId}`),
+    onSuccess: () => navigate("/new-analysis"),
+  });
+
   if (!project) {
     return <p className="text-sm text-slate-500">Loading project…</p>;
   }
@@ -91,11 +100,40 @@ export function ProjectDetail() {
   return (
     <div className="space-y-8 max-w-4xl">
       <div>
-        <Link to="/new-analysis" className="text-xs text-slate-500 hover:underline">
-          ← All projects
-        </Link>
+        <div className="flex items-center justify-between">
+          <Link to="/new-analysis" className="text-xs text-slate-500 hover:underline">
+            ← All projects
+          </Link>
+          {confirmDelete ? (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-slate-500">Delete this project and all its data?</span>
+              <button
+                className="text-risk-critical underline disabled:opacity-50"
+                disabled={deleteProject.isPending}
+                onClick={() => deleteProject.mutate()}
+              >
+                Confirm
+              </button>
+              <button className="text-slate-500 underline" onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              className="text-xs text-slate-400 hover:text-risk-critical"
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete project
+            </button>
+          )}
+        </div>
         <h2 className="text-lg font-semibold">{project.name}</h2>
         <p className="text-sm text-slate-500">{project.jurisdiction}</p>
+        {deleteProject.isError && (
+          <p className="text-xs text-risk-critical mt-1">
+            {(deleteProject.error as Error).message}
+          </p>
+        )}
       </div>
 
       <section className="space-y-3">
@@ -168,7 +206,17 @@ export function ProjectDetail() {
           <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
             Documents
           </h3>
-          <div>
+          <div className="flex items-center gap-2">
+            <select
+              value={uploadCollectionType}
+              onChange={(e) => setUploadCollectionType(e.target.value as CollectionType)}
+              title="What kind of source is this document?"
+              className="rounded border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 text-sm"
+            >
+              <option value="COMPANY">Company evidence (official/first-party)</option>
+              <option value="THIRD_PARTY">Third-party literature (e.g. academic article, news)</option>
+              <option value="COMPETITOR">Competitor material</option>
+            </select>
             <input
               ref={fileInputRef}
               type="file"
@@ -189,6 +237,12 @@ export function ProjectDetail() {
             </button>
           </div>
         </div>
+        <p className="text-xs text-slate-500">
+          Mark evidence that isn't your own company's official material as "Third-party" or
+          "Competitor" — this tells the analysis to treat it as secondary/analog evidence rather
+          than authoritative company evidence, so a missing fact in that source is treated as a
+          gap in this analysis, not a compliance finding against the company.
+        </p>
         {uploadMutation.isError && (
           <p className="text-xs text-risk-critical">{(uploadMutation.error as Error).message}</p>
         )}

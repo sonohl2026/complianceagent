@@ -6,12 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.compliance_issue import ComplianceIssue
+from app.models.crawl import CrawledPage, CrawlSnapshot
 from app.models.enums import ComplianceIssueStatus, RiskLevel
 from app.models.product import Product
 from app.models.project import Project
+from app.models.source_document import SourceDocument
 from app.schemas.compliance_issue import ComplianceIssueRead
 from app.schemas.product import ProductCreate, ProductRead
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
+from app.services.storage.file_storage import get_storage
 
 _RISK_ORDER = {RiskLevel.CRITICAL: 0, RiskLevel.HIGH: 1, RiskLevel.MEDIUM: 2, RiskLevel.LOW: 3}
 
@@ -65,8 +68,35 @@ async def delete_project(project_id: uuid.UUID, db: AsyncSession = Depends(get_d
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Collect on-disk file paths before the cascade delete removes the rows
+    # that reference them -- DB foreign keys cascade the relational data, but
+    # nothing on the filesystem is cleaned up automatically.
+    doc_paths = (
+        await db.execute(
+            select(SourceDocument.local_path).where(
+                SourceDocument.project_id == project_id, SourceDocument.local_path.is_not(None)
+            )
+        )
+    ).scalars().all()
+    page_paths = (
+        await db.execute(
+            select(CrawledPage.html_path, CrawledPage.screenshot_path, CrawledPage.text_path)
+            .join(CrawlSnapshot, CrawledPage.snapshot_id == CrawlSnapshot.id)
+            .where(CrawlSnapshot.project_id == project_id)
+        )
+    ).all()
+
     await db.delete(project)
     await db.commit()
+
+    storage = get_storage()
+    for path in doc_paths:
+        storage.delete(path)
+    for html_path, screenshot_path, text_path in page_paths:
+        for path in (html_path, screenshot_path, text_path):
+            if path:
+                storage.delete(path)
 
 
 @router.post("/projects/{project_id}/products", response_model=ProductRead, status_code=201)

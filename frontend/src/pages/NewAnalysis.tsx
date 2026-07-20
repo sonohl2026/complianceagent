@@ -30,6 +30,15 @@ export function NewAnalysis() {
     enabled: !!companyId,
   });
 
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const deleteProject = useMutation({
+    mutationFn: (id: string) => api.del(`/projects/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects", companyId] });
+      setConfirmDeleteId(null);
+    },
+  });
+
   const createCompany = useMutation({
     mutationFn: (payload: CompanyCreate) => api.post<Company>("/companies", payload),
     onSuccess: (company) => {
@@ -147,9 +156,12 @@ export function NewAnalysis() {
           {projects && projects.length > 0 && (
             <ul className="space-y-2">
               {projects.map((p) => (
-                <li key={p.id}>
+                <li
+                  key={p.id}
+                  className="flex items-center gap-2 rounded border border-slate-200 dark:border-slate-800 px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-900"
+                >
                   <button
-                    className="w-full text-left rounded border border-slate-200 dark:border-slate-800 px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-900"
+                    className="flex-1 text-left"
                     onClick={() => navigate(`/projects/${p.id}`)}
                   >
                     <span className="font-medium">{p.name}</span>
@@ -157,9 +169,40 @@ export function NewAnalysis() {
                       <span className="ml-2 text-slate-500">({p.jurisdiction})</span>
                     )}
                   </button>
+                  {confirmDeleteId === p.id ? (
+                    <div className="flex items-center gap-2 shrink-0 text-xs">
+                      <span className="text-slate-500">Delete "{p.name}" and all its data?</span>
+                      <button
+                        className="text-risk-critical underline disabled:opacity-50"
+                        disabled={deleteProject.isPending}
+                        onClick={() => deleteProject.mutate(p.id)}
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        className="text-slate-500 underline"
+                        onClick={() => setConfirmDeleteId(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      className="shrink-0 text-xs text-slate-400 hover:text-risk-critical"
+                      title="Delete project"
+                      onClick={() => setConfirmDeleteId(p.id)}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
+          )}
+          {deleteProject.isError && (
+            <p className="text-xs text-risk-critical">
+              {(deleteProject.error as Error).message}
+            </p>
           )}
 
           {!showProjectForm && (

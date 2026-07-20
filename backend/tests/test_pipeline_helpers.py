@@ -8,6 +8,7 @@ from app.services.analysis.pipeline import (
     _project_facts,
     _redact_chunk_text,
     _resolve_citations,
+    _resolve_stage_models,
     _safe_enum,
 )
 from app.models.enums import CitationRole
@@ -142,3 +143,30 @@ def test_prior_outputs_selector_never_crashes_on_missing_keys():
     # pick() must skip missing keys rather than KeyError.
     assert _prior_outputs_for_stage("synthesis", {}) == {}
     assert _prior_outputs_for_stage("domain_analysis", {}) == {}
+
+
+def test_resolve_stage_models_falls_back_to_default_when_tiers_unset():
+    extraction, synthesis, citation = _resolve_stage_models("anthropic/claude-sonnet-5", {})
+    assert extraction == synthesis == citation == "anthropic/claude-sonnet-5"
+
+
+def test_resolve_stage_models_uses_tier_overrides_when_set():
+    privacy = {
+        "openrouter_extraction_model": "anthropic/claude-haiku-4.5",
+        "openrouter_synthesis_model": "anthropic/claude-opus-4.8",
+        "openrouter_citation_model": "anthropic/claude-haiku-4.5",
+    }
+    extraction, synthesis, citation = _resolve_stage_models("anthropic/claude-sonnet-5", privacy)
+    assert extraction == "anthropic/claude-haiku-4.5"
+    assert synthesis == "anthropic/claude-opus-4.8"
+    assert citation == "anthropic/claude-haiku-4.5"
+
+
+def test_resolve_stage_models_partial_override_falls_back_per_tier():
+    # Only the extraction tier is set; synthesis/citation must still fall
+    # back to the default model individually, not all-or-nothing.
+    privacy = {"openrouter_extraction_model": "anthropic/claude-haiku-4.5"}
+    extraction, synthesis, citation = _resolve_stage_models("anthropic/claude-sonnet-5", privacy)
+    assert extraction == "anthropic/claude-haiku-4.5"
+    assert synthesis == "anthropic/claude-sonnet-5"
+    assert citation == "anthropic/claude-sonnet-5"

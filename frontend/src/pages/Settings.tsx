@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { api } from "../api/client";
@@ -113,6 +113,47 @@ export function Settings() {
         </p>
       </section>
 
+      <section className="space-y-3">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Per-stage models (cost control)
+        </h3>
+        <p className="text-xs text-slate-500">
+          An analysis runs 7 model calls. Input audit, fact/claim extraction, coding, and citation
+          audit are comparatively mechanical — a cheap/fast model handles them fine. Domain
+          analysis and synthesis are where the actual compliance reasoning happens, so they stay
+          on the default model above unless you set a synthesis-tier override here. Leave any
+          field blank to fall back to the default model.
+        </p>
+        <button
+          className="text-sm rounded border border-slate-300 dark:border-slate-700 px-3 py-1"
+          onClick={() =>
+            mutation.mutate({
+              openrouter_model: "anthropic/claude-haiku-4.5",
+              openrouter_extraction_model: "",
+              openrouter_synthesis_model: "",
+              openrouter_citation_model: "",
+            })
+          }
+        >
+          Use cheap testing defaults (Claude Haiku 4.5 for everything)
+        </button>
+        {(
+          [
+            ["openrouter_extraction_model", "Extraction tier (input audit, facts, claims, coding)"],
+            ["openrouter_synthesis_model", "Synthesis tier (domain analysis, synthesis)"],
+            ["openrouter_citation_model", "Citation-audit tier"],
+          ] as [keyof AppSettingsUpdate & keyof AppSettings, string][]
+        ).map(([key, label]) => (
+          <PerStageModelInput
+            key={`${key}:${data[key]}`}
+            settingKey={key}
+            label={label}
+            currentValue={String(data[key] ?? "")}
+            mutation={mutation}
+          />
+        ))}
+      </section>
+
       <section className="space-y-2">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
           Privacy controls
@@ -157,6 +198,40 @@ export function Settings() {
           <MasterPromptSection />
         </>
       )}
+    </div>
+  );
+}
+
+function PerStageModelInput({
+  settingKey,
+  label,
+  currentValue,
+  mutation,
+}: {
+  settingKey: keyof AppSettingsUpdate;
+  label: string;
+  currentValue: string;
+  mutation: UseMutationResult<AppSettings, Error, AppSettingsUpdate>;
+}) {
+  const [value, setValue] = useState(currentValue);
+
+  return (
+    <div className="flex gap-2 items-center">
+      <label className="text-xs text-slate-500 w-72 shrink-0">{label}</label>
+      <input
+        type="text"
+        placeholder="blank = use default model"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="flex-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 text-sm"
+      />
+      <button
+        className="rounded border border-slate-300 dark:border-slate-700 px-3 py-1 text-sm disabled:opacity-50"
+        disabled={mutation.isPending || value === currentValue}
+        onClick={() => mutation.mutate({ [settingKey]: value })}
+      >
+        Save
+      </button>
     </div>
   );
 }
