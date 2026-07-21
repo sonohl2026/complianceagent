@@ -15,7 +15,7 @@ from app.schemas.job import JobRead
 from app.schemas.quick_scan import OverrideRequest, QuickScanCreateRequest
 from app.services.crawling.fetch import safe_fetch
 from app.services.jobs.enqueue import enqueue_job
-from app.services.llm.cost_estimate import QUICK_SCAN_STAGE_MAX_TOKENS, preflight_credit_check
+from app.services.llm.cost_estimate import preflight_credit_check
 from app.services.parsing.dispatch import SUPPORTED_EXTENSIONS, parse_document
 from app.services.parsing.base import ParsingError
 from app.services.parsing.parsers.html_parser import parse_html
@@ -61,9 +61,7 @@ async def _launch_quick_scan(
 
     runtime_settings = _require_ready_settings()
     credit_error = await preflight_credit_check(
-        runtime_settings["openrouter_api_key"],
-        runtime_settings["openrouter_model"],
-        stage_max_tokens=QUICK_SCAN_STAGE_MAX_TOKENS,
+        runtime_settings["openrouter_api_key"], runtime_settings["openrouter_model"]
     )
     if credit_error:
         raise HTTPException(status_code=402, detail=credit_error)

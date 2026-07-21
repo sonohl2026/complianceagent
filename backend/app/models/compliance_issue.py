@@ -17,12 +17,10 @@ class ComplianceIssue(UUIDPKMixin, TimestampMixin, Base):
     what got fixed, instead of forcing a full re-read of a new report every
     time (user-requested; see docs/data-model.md).
 
-    Matching a new run's findings against these is a normalized-title +
-    domain equality check (app.services.analysis.checklist.normalize_title)
-    -- deterministic and free (no extra LLM call), but an approximation:
-    if the model rewords a finding's title between runs, this will read it
-    as a new issue rather than the same one continuing. Good enough for a
-    first version; a follow-up could use embedding similarity instead."""
+    Legacy: populated by the old document-driven pipeline (now removed) via
+    a normalized-title + domain equality check against each run's findings.
+    Historical rows remain and still render in ComplianceChecklist.tsx, but
+    nothing writes new ones now that pipeline is gone."""
 
     __tablename__ = "compliance_issues"
 

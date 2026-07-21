@@ -10,67 +10,14 @@ from app.database import get_db
 from app.models.analysis import AnalysisRun, Finding
 from app.models.coding import CodingCandidate
 from app.models.enums import JobStatus
-from app.models.job import Job
 from app.models.product import Product
 from app.models.project import Project
-from app.schemas.analysis import AnalysisCreateRequest, AnalysisRunRead, CodingCandidateRead, FindingRead
+from app.schemas.analysis import AnalysisRunRead, CodingCandidateRead, FindingRead
 from app.schemas.dashboard import RecentAnalysisRow
-from app.schemas.job import JobRead
-from app.services.jobs.enqueue import enqueue_job
-from app.services.llm.cost_estimate import preflight_credit_check
 from app.services.reporting.data import gather_report_data
 from app.services.reporting.markdown_report import build_markdown_report
-from app.services.storage.settings_store import load_runtime_settings
-# Imported at module level -- see the comment in api/v1/crawls.py for why.
-from app.workers.analysis_tasks import run_analysis_task
 
 router = APIRouter()
-
-
-@router.post("/projects/{project_id}/analyses", response_model=JobRead, status_code=202)
-async def start_analysis(
-    project_id: uuid.UUID, payload: AnalysisCreateRequest, db: AsyncSession = Depends(get_db)
-) -> Job:
-    project = await db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    runtime_settings = load_runtime_settings()
-    if not runtime_settings.get("openrouter_api_key"):
-        raise HTTPException(
-            status_code=400,
-            detail="No OpenRouter API key configured. Add one in Settings before running an analysis.",
-        )
-    if not runtime_settings.get("openrouter_model"):
-        raise HTTPException(
-            status_code=400,
-            detail="No OpenRouter model configured. Set an exact model slug in Settings before running an analysis.",
-        )
-
-    credit_error = await preflight_credit_check(
-        runtime_settings["openrouter_api_key"], runtime_settings["openrouter_model"]
-    )
-    if credit_error:
-        raise HTTPException(status_code=402, detail=credit_error)
-
-    analysis_run = AnalysisRun(
-        project_id=project_id,
-        product_id=payload.product_id or project.default_product_id,
-        analysis_type=payload.analysis_type,
-        status=JobStatus.QUEUED,
-    )
-    db.add(analysis_run)
-    await db.flush()
-
-    job = Job(job_type="compliance_analysis", project_id=project_id, status=JobStatus.QUEUED, related_id=analysis_run.id)
-    db.add(job)
-    await db.commit()
-    await db.refresh(job)
-    await db.refresh(analysis_run)
-
-    await enqueue_job(db, job, run_analysis_task, str(job.id), str(analysis_run.id), also_fail=[analysis_run])
-
-    return job
 
 
 @router.get("/projects/{project_id}/analyses", response_model=list[AnalysisRunRead])
@@ -126,43 +73,14 @@ async def cancel_analysis(analysis_id: uuid.UUID, db: AsyncSession = Depends(get
         raise HTTPException(status_code=404, detail="Analysis run not found")
     if analysis_run.status in (JobStatus.COMPLETE, JobStatus.FAILED, JobStatus.CANCELLED):
         raise HTTPException(status_code=400, detail=f"Analysis is already {analysis_run.status.value}")
-    # Cooperative cancellation: app/services/analysis/pipeline.py checks this
-    # column between stages and stops itself; no forced task kill.
+    # Flips the status flag, but quick_scan_tasks.py's worker unconditionally
+    # overwrites it back to RUNNING once it picks the job up, so this only
+    # actually stops a job in the brief window before Celery dequeues it --
+    # not a true mid-run cancel. Pre-existing limitation, not new here.
     analysis_run.status = JobStatus.CANCELLED
     await db.commit()
     await db.refresh(analysis_run)
     return analysis_run
-
-
-@router.post("/analyses/{analysis_id}/retry", response_model=JobRead, status_code=202)
-async def retry_analysis(analysis_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> Job:
-    previous = await db.get(AnalysisRun, analysis_id)
-    if previous is None:
-        raise HTTPException(status_code=404, detail="Analysis run not found")
-    if previous.status not in (JobStatus.FAILED, JobStatus.CANCELLED):
-        raise HTTPException(status_code=400, detail="Only a failed or cancelled analysis can be retried")
-
-    runtime_settings = load_runtime_settings()
-    if not runtime_settings.get("openrouter_api_key") or not runtime_settings.get("openrouter_model"):
-        raise HTTPException(status_code=400, detail="OpenRouter key/model must be configured in Settings")
-
-    new_run = AnalysisRun(
-        project_id=previous.project_id,
-        product_id=previous.product_id,
-        analysis_type=previous.analysis_type,
-        status=JobStatus.QUEUED,
-    )
-    db.add(new_run)
-    await db.flush()
-
-    job = Job(job_type="compliance_analysis", project_id=previous.project_id, status=JobStatus.QUEUED, related_id=new_run.id)
-    db.add(job)
-    await db.commit()
-    await db.refresh(job)
-
-    await enqueue_job(db, job, run_analysis_task, str(job.id), str(new_run.id), also_fail=[new_run])
-
-    return job
 
 
 @router.get("/analyses/{analysis_id}/findings", response_model=list[FindingRead])

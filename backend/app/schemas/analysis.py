@@ -6,11 +6,6 @@ from pydantic import BaseModel, ConfigDict
 from app.models.enums import JobStatus, RiskLevel, Verdict
 
 
-class AnalysisCreateRequest(BaseModel):
-    product_id: uuid.UUID | None = None
-    analysis_type: str = "FULL_COMPLIANCE_ANALYSIS"
-
-
 class AnalysisRunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -6,7 +6,6 @@ import { api } from "../api/client";
 import { ComplianceChecklist } from "../components/ComplianceChecklist";
 import { QuickScanLaunchPanel } from "../components/quickScan/QuickScanLaunchPanel";
 import { StatusBadge } from "../components/StatusBadge";
-import { AnalysisPanel } from "./AnalysisPanel";
 import { CrawlPanel } from "./CrawlPanel";
 import type { CollectionType, Job, SourceDocument } from "../types/document";
 import type { Product, ProductCreate, Project } from "../types/project";
@@ -301,13 +300,6 @@ export function ProjectDetail() {
       <section className="space-y-3">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Quick Scan</h3>
         <QuickScanLaunchPanel projectId={projectId!} />
-      </section>
-
-      <section className="space-y-3">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Compliance Analysis (legacy, document-driven)
-        </h3>
-        <AnalysisPanel projectId={projectId!} />
       </section>
     </div>
   );

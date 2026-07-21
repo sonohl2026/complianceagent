@@ -38,11 +38,11 @@ class AnalysisRun(UUIDPKMixin, TimestampMixin, Base):
     overall_verdict: Mapped[Verdict | None] = mapped_column(Enum(Verdict, name="verdict"))
     overall_risk: Mapped[RiskLevel | None] = mapped_column(Enum(RiskLevel, name="risk_level"))
     readiness_score: Mapped[int | None] = mapped_column(Integer)
-    # Set only when app.services.analysis.scoring::apply_readiness_score_guardrail
-    # lowered the model's own reported score to respect a hard internal-
-    # consistency rule (e.g. a STOP verdict can't coexist with a high
-    # readiness score) -- explains *why* readiness_score isn't simply
-    # whatever the model said, without hiding what the model said (the
+    # Legacy column (the pipeline that wrote it has been removed; historical
+    # rows keep it). Was set only when a hard internal-consistency guardrail
+    # lowered the model's own reported score (e.g. a STOP verdict can't
+    # coexist with a high readiness score) -- explains *why* readiness_score
+    # wasn't simply whatever the model said, without hiding what the model said (the
     # original number is quoted in the note text itself).
     readiness_score_note: Mapped[str | None] = mapped_column(Text)
     confidence_score: Mapped[int | None] = mapped_column(Integer)

@@ -1,3 +1,5 @@
+import pytest
+
 from app.services.quick_scan.metrics import RunSample, aggregate, percentile
 
 
@@ -30,7 +32,7 @@ def test_aggregate_wall_clock_and_cost():
     assert result["sample_size"] == 3
     assert result["wall_clock_p50_seconds"] == 20.0
     assert result["cost_p50_usd"] == 0.10
-    assert result["cost_mean_usd"] == 0.10
+    assert result["cost_mean_usd"] == pytest.approx(0.10)
     assert result["not_scored_rate"] == 1 / 3
 
 

@@ -35,4 +35,4 @@ celery_app.conf.update(
 # Task modules must be imported explicitly (not module-name "tasks", so
 # Celery's autodiscover_tasks convention doesn't apply) so their @celery_app.task
 # decorators register.
-from app.workers import analysis_tasks, crawl_tasks, ingestion_tasks, monitoring_tasks, quick_scan_tasks  # noqa: E402,F401
+from app.workers import crawl_tasks, ingestion_tasks, monitoring_tasks, quick_scan_tasks  # noqa: E402,F401

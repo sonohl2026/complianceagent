@@ -6,13 +6,8 @@ const PRIMARY_NAV_ITEMS = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/new-analysis", label: "New Analysis" },
   { to: "/analyses", label: "Past Analyses" },
-  { to: "/settings", label: "Settings" },
-];
-
-const SECONDARY_NAV_ITEMS = [
-  { to: "/chat", label: "Chat" },
-  { to: "/claims-register", label: "Claims Register" },
   { to: "/monitoring", label: "Monitoring" },
+  { to: "/settings", label: "Settings" },
 ];
 
 function navLinkClass({ isActive }: { isActive: boolean }) {
@@ -51,19 +46,6 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
-
-        <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800">
-          <p className="px-3 mb-1 text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-600">
-            More tools
-          </p>
-          <nav className="space-y-1">
-            {SECONDARY_NAV_ITEMS.map((item) => (
-              <NavLink key={item.to} to={item.to} className={navLinkClass}>
-                {item.label}
-              </NavLink>
-            ))}
-          </nav>
-        </div>
       </aside>
       <main className="flex-1 p-6">
         <Outlet />
