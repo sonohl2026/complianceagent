@@ -1,13 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { api } from "../../api/client";
+import { api, parseErrorDetail } from "../../api/client";
 import type { AnalysisRun, QuickScanAssessment } from "../../types/analysis";
 import type { Job } from "../../types/document";
 import { StatusBadge } from "../StatusBadge";
 import { RiskBadge } from "../VerdictBadge";
 import { formatAnalysisStage } from "../../utils/analysisStages";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
+
+// Same set app/services/parsing/dispatch.py's SUPPORTED_EXTENSIONS knows how
+// to turn into text -- kept in sync by hand since the accept list is tiny
+// and rarely changes; there's no cheap way to fetch it from the API without
+// an extra round-trip just to populate a file picker's accept attribute.
+const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".html", ".htm", ".md", ".txt"];
 
 function asResult(value: AnalysisRun["quick_scan_result_json"]): QuickScanAssessment | null {
   return Object.keys(value).length > 0 ? (value as QuickScanAssessment) : null;
@@ -15,9 +23,12 @@ function asResult(value: AnalysisRun["quick_scan_result_json"]): QuickScanAssess
 
 export function QuickScanLaunchPanel({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<"text" | "url">("text");
+  const [mode, setMode] = useState<"file" | "text" | "url">("file");
   const [sourceText, setSourceText] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: runs, refetch } = useQuery({
     queryKey: ["quick-scans", projectId],
@@ -31,35 +42,64 @@ export function QuickScanLaunchPanel({ projectId }: { projectId: string }) {
     },
   });
 
+  const resetInputs = () => {
+    setSourceText("");
+    setSourceUrl("");
+    setFile(null);
+  };
+
   const startMutation = useMutation({
-    mutationFn: () =>
-      api.post<Job>(`/projects/${projectId}/quick-scans`, {
+    mutationFn: async () => {
+      if (mode === "file" && file) {
+        const formData = new FormData();
+        formData.append("file", file);
+        const response = await fetch(`${API_BASE_URL}/projects/${projectId}/quick-scans/upload`, {
+          method: "POST",
+          body: formData,
+        });
+        if (!response.ok) throw new Error(parseErrorDetail(await response.text(), response.statusText));
+        return (await response.json()) as Job;
+      }
+      return api.post<Job>(`/projects/${projectId}/quick-scans`, {
         source_text: mode === "text" ? sourceText : undefined,
         source_url: mode === "url" ? sourceUrl : undefined,
-      }),
+      });
+    },
     onSuccess: () => {
-      setSourceText("");
-      setSourceUrl("");
+      resetInputs();
       queryClient.invalidateQueries({ queryKey: ["quick-scans", projectId] });
       refetch();
     },
   });
 
-  const canSubmit = mode === "text" ? sourceText.trim().length > 0 : sourceUrl.trim().length > 0;
+  const acceptFile = (candidate: File) => {
+    const extension = candidate.name.slice(candidate.name.lastIndexOf(".")).toLowerCase();
+    if (!ACCEPTED_EXTENSIONS.includes(extension)) return;
+    setFile(candidate);
+  };
+
+  const canSubmit =
+    mode === "text" ? sourceText.trim().length > 0 : mode === "url" ? sourceUrl.trim().length > 0 : file !== null;
 
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-500 max-w-xl">
-        Paste any document mentioning the product (a clinical paper, press release, or one-pager
-        works fine) or give a URL -- it's only used to identify the product. Regulatory, coding,
-        coverage, and payment status are then looked up live from openFDA and the CMS Coverage
-        API, not read from the document.
+        Drop a document mentioning the product (a clinical paper, press release, or one-pager
+        works fine), paste text, or give a URL -- it's only used to identify the product.
+        Regulatory, coding, coverage, and payment status are then looked up live from openFDA and
+        the CMS Coverage API, not read from the document.
       </p>
 
       <div className="flex items-center rounded border border-slate-300 dark:border-slate-700 text-xs overflow-hidden w-fit">
         <button
+          onClick={() => setMode("file")}
+          className={`px-3 py-1.5 ${mode === "file" ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900" : "hover:bg-slate-100 dark:hover:bg-slate-900"}`}
+        >
+          Upload file
+        </button>
+        <button
           onClick={() => setMode("text")}
-          className={`px-3 py-1.5 ${mode === "text" ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900" : "hover:bg-slate-100 dark:hover:bg-slate-900"}`}
+          className={`px-3 py-1.5 border-l border-slate-300 dark:border-slate-700 ${mode === "text" ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900" : "hover:bg-slate-100 dark:hover:bg-slate-900"}`}
         >
           Paste text
         </button>
@@ -71,7 +111,62 @@ export function QuickScanLaunchPanel({ projectId }: { projectId: string }) {
         </button>
       </div>
 
-      {mode === "text" ? (
+      {mode === "file" && (
+        <div
+          onClick={() => fileInputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragOver(true);
+          }}
+          onDragLeave={() => setIsDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragOver(false);
+            const dropped = e.dataTransfer.files?.[0];
+            if (dropped) acceptFile(dropped);
+          }}
+          className={`flex flex-col items-center justify-center gap-1 rounded border-2 border-dashed px-4 py-8 text-center cursor-pointer transition-colors ${
+            isDragOver
+              ? "border-teal-600 bg-teal-700/5"
+              : "border-slate-300 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-600"
+          }`}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPTED_EXTENSIONS.join(",")}
+            className="hidden"
+            onChange={(e) => {
+              const picked = e.target.files?.[0];
+              if (picked) acceptFile(picked);
+              e.target.value = "";
+            }}
+          />
+          {file ? (
+            <>
+              <p className="text-sm font-medium">{file.name}</p>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFile(null);
+                }}
+                className="text-xs text-slate-500 hover:underline"
+              >
+                Remove
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                Drop a file here, or click to browse
+              </p>
+              <p className="text-xs text-slate-400">{ACCEPTED_EXTENSIONS.join(", ")}</p>
+            </>
+          )}
+        </div>
+      )}
+
+      {mode === "text" && (
         <textarea
           value={sourceText}
           onChange={(e) => setSourceText(e.target.value)}
@@ -79,7 +174,9 @@ export function QuickScanLaunchPanel({ projectId }: { projectId: string }) {
           placeholder="Paste a document describing the product…"
           className="w-full rounded border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm"
         />
-      ) : (
+      )}
+
+      {mode === "url" && (
         <input
           value={sourceUrl}
           onChange={(e) => setSourceUrl(e.target.value)}

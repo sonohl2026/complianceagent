@@ -19,6 +19,8 @@ _PARSERS = {
     ".txt": parse_plain_text,
 }
 
+SUPPORTED_EXTENSIONS = sorted(_PARSERS.keys())
+
 
 def parse_document(extension: str, content: bytes) -> ParsedDocument:
     parser = _PARSERS.get(extension)

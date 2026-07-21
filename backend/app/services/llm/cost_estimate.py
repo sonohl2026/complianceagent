@@ -47,6 +47,16 @@ STAGE_MAX_TOKENS = {
     "citation_audit": 8000,
 }
 
+# quick_scan (app/services/quick_scan/{stage1_extraction,stage3_synthesis}.py)
+# is a completely different, much smaller pipeline -- 2 LLM stages, not 7 --
+# so it needs its own floor. Reusing STAGE_MAX_TOKENS here would overestimate
+# quick_scan's minimum cost by ~30x and wrongly block runs on a perfectly
+# adequate balance.
+QUICK_SCAN_STAGE_MAX_TOKENS = {
+    "stage1_extraction": 500,
+    "stage3_synthesis": 2000,
+}
+
 
 async def _get_remaining_balance_usd(client: httpx.AsyncClient, api_key: str) -> float | None:
     response = await client.get(
@@ -73,11 +83,20 @@ async def _get_completion_price_per_token(client: httpx.AsyncClient, api_key: st
     return None
 
 
-async def preflight_credit_check(api_key: str, model: str) -> str | None:
+async def preflight_credit_check(
+    api_key: str, model: str, stage_max_tokens: dict[str, int] | None = None
+) -> str | None:
     """Returns a user-facing error message if the account's balance is
     clearly insufficient to complete a full analysis, else None. Never
     raises -- any failure to determine balance/pricing just skips the
-    check (fail open)."""
+    check (fail open).
+
+    stage_max_tokens defaults to the old document-driven pipeline's
+    STAGE_MAX_TOKENS; pass QUICK_SCAN_STAGE_MAX_TOKENS for quick_scan runs,
+    whose much smaller 2-stage budget would otherwise be checked against a
+    ~30x-too-large floor."""
+    if stage_max_tokens is None:
+        stage_max_tokens = STAGE_MAX_TOKENS
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             remaining = await _get_remaining_balance_usd(client, api_key)
@@ -89,7 +108,7 @@ async def preflight_credit_check(api_key: str, model: str) -> str | None:
     if remaining is None or price_per_token is None:
         return None
 
-    minimum_cost = sum(STAGE_MAX_TOKENS.values()) * price_per_token
+    minimum_cost = sum(stage_max_tokens.values()) * price_per_token
     if remaining < minimum_cost:
         return (
             f"Your OpenRouter balance (${remaining:.2f}) is below the estimated minimum cost of a full "
