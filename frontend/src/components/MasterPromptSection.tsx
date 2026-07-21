@@ -19,6 +19,15 @@ export function MasterPromptSection() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [changeSummary, setChangeSummary] = useState("");
   const [confirmation, setConfirmation] = useState<PromptVersionDetail | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  async function copyText(id: string, text: string | undefined) {
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 1500);
+  }
 
   const { data: versions, refetch: refetchVersions } = useQuery({
     queryKey: ["prompt-versions"],
@@ -31,6 +40,12 @@ export function MasterPromptSection() {
     queryKey: ["prompt-version-detail", active?.id],
     queryFn: () => api.get<PromptVersionDetail>(`/prompts/master/versions/${active!.id}`),
     enabled: !!active,
+  });
+
+  const { data: expandedDetail } = useQuery({
+    queryKey: ["prompt-version-detail", expandedId],
+    queryFn: () => api.get<PromptVersionDetail>(`/prompts/master/versions/${expandedId}`),
+    enabled: !!expandedId && expandedId !== active?.id,
   });
 
   const uploadMutation = useMutation({
@@ -91,6 +106,26 @@ export function MasterPromptSection() {
           {active.change_summary && (
             <p className="text-xs text-slate-500 mt-1">{active.change_summary}</p>
           )}
+          <div className="flex items-center gap-3 mt-2">
+            <button
+              className="text-xs text-slate-900 dark:text-slate-100 underline"
+              onClick={() => setExpandedId(expandedId === active.id ? null : active.id)}
+            >
+              {expandedId === active.id ? "Hide full text" : "View full text"}
+            </button>
+            <button
+              className="text-xs text-slate-900 dark:text-slate-100 underline disabled:opacity-50"
+              disabled={!activeDetail}
+              onClick={() => copyText(active.id, activeDetail?.content)}
+            >
+              {copiedId === active.id ? "Copied" : "Copy full text"}
+            </button>
+          </div>
+          {expandedId === active.id && activeDetail && (
+            <pre className="mt-2 max-h-[32rem] overflow-y-auto whitespace-pre-wrap rounded bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 text-xs font-mono">
+              {activeDetail.content}
+            </pre>
+          )}
         </div>
       )}
 
@@ -142,22 +177,46 @@ export function MasterPromptSection() {
           </summary>
           <ul className="mt-2 space-y-1.5">
             {versions.map((v) => (
-              <li key={v.id} className="flex items-center justify-between text-sm">
-                <span>
-                  Version {v.version_label}
-                  {v.is_active && <span className="ml-2 text-xs text-green-700 dark:text-green-400">(active)</span>}
-                  {v.change_summary && (
-                    <span className="ml-2 text-xs text-slate-500">— {v.change_summary}</span>
-                  )}
-                </span>
-                {!v.is_active && (
-                  <button
-                    className="text-xs text-slate-600 dark:text-slate-300 underline shrink-0"
-                    disabled={activateMutation.isPending}
-                    onClick={() => activateMutation.mutate(v.id)}
-                  >
-                    Activate
-                  </button>
+              <li key={v.id} className="text-sm">
+                <div className="flex items-center justify-between">
+                  <span>
+                    Version {v.version_label}
+                    {v.is_active && <span className="ml-2 text-xs text-green-700 dark:text-green-400">(active)</span>}
+                    {v.change_summary && (
+                      <span className="ml-2 text-xs text-slate-500">— {v.change_summary}</span>
+                    )}
+                  </span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <button
+                      className="text-xs text-slate-600 dark:text-slate-300 underline"
+                      onClick={() => setExpandedId(expandedId === v.id ? null : v.id)}
+                    >
+                      {expandedId === v.id ? "Hide text" : "View text"}
+                    </button>
+                    {!v.is_active && (
+                      <button
+                        className="text-xs text-slate-600 dark:text-slate-300 underline"
+                        disabled={activateMutation.isPending}
+                        onClick={() => activateMutation.mutate(v.id)}
+                      >
+                        Activate
+                      </button>
+                    )}
+                  </span>
+                </div>
+                {expandedId === v.id && (
+                  <>
+                    <pre className="mt-2 max-h-[32rem] overflow-y-auto whitespace-pre-wrap rounded bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 text-xs font-mono">
+                      {v.is_active ? activeDetail?.content : expandedDetail?.content}
+                    </pre>
+                    <button
+                      className="text-xs text-slate-600 dark:text-slate-300 underline mt-1 disabled:opacity-50"
+                      disabled={!(v.is_active ? activeDetail : expandedDetail)}
+                      onClick={() => copyText(v.id, v.is_active ? activeDetail?.content : expandedDetail?.content)}
+                    >
+                      {copiedId === v.id ? "Copied" : "Copy text"}
+                    </button>
+                  </>
                 )}
               </li>
             ))}

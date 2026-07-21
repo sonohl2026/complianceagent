@@ -14,6 +14,8 @@ export interface AppSettings {
   exclude_restricted_documents: boolean;
   allow_ocr: boolean;
   allow_lan_access: boolean;
+  cms_license_accepted: boolean;
+  cpt_license: boolean;
   local_data_notice: string;
 }
 
@@ -31,4 +33,6 @@ export interface AppSettingsUpdate {
   exclude_restricted_documents?: boolean;
   allow_ocr?: boolean;
   allow_lan_access?: boolean;
+  cms_license_accepted?: boolean;
+  cpt_license?: boolean;
 }

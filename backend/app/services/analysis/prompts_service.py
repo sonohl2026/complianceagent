@@ -30,6 +30,7 @@ _MODULE_PROMPT_FILES = {
     "citation_audit": "citation_audit.md",
     "chat_qa": "chat_qa.md",
     "material_change_assessment": "material_change_assessment.md",
+    "quick_scan_stage1": "quick_scan_stage1_extraction.md",
 }
 
 

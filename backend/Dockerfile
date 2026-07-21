@@ -44,6 +44,7 @@ RUN pip install --upgrade pip && \
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY tests ./tests
+COPY benchmark_suite.json ./
 
 # scripts/ lives at the repo root (shared across services) and is mounted at
 # runtime via docker-compose; create the mount point here for local `docker build` use.

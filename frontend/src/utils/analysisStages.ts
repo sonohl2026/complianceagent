@@ -24,11 +24,27 @@ const STAGE_LABELS: Record<string, string> = {
   citation_audit: "Citation audit",
 };
 
+// quick_scan (app/services/quick_scan/pipeline.py::run_quick_scan) has its
+// own, much shorter 3-stage sequence -- kept separate from
+// ANALYSIS_STAGE_ORDER above since the two pipelines' stage names don't
+// overlap and mixing them into one ordered list would misnumber both.
+const QUICK_SCAN_STAGE_ORDER = ["stage1_extraction", "retrieval", "stage3_synthesis"];
+
+const QUICK_SCAN_STAGE_LABELS: Record<string, string> = {
+  stage1_extraction: "Identifying product",
+  retrieval: "Retrieving evidence (openFDA, CMS)",
+  stage3_synthesis: "Synthesizing assessment",
+};
+
 /** "synthesis" -> "Synthesis (5/6)". Falls back to the raw stage name for
- * anything not in the stage list (e.g. "complete", "cancelled"), and to
+ * anything not in either stage list (e.g. "complete", "cancelled"), and to
  * "starting…" when there's no stage yet. */
 export function formatAnalysisStage(stage: string | null | undefined): string {
   if (!stage) return "starting…";
+  const quickScanIndex = QUICK_SCAN_STAGE_ORDER.indexOf(stage);
+  if (quickScanIndex !== -1) {
+    return `${QUICK_SCAN_STAGE_LABELS[stage]} (${quickScanIndex + 1}/${QUICK_SCAN_STAGE_ORDER.length})`;
+  }
   const index = ANALYSIS_STAGE_ORDER.indexOf(stage);
   if (index === -1) return stage;
   return `${STAGE_LABELS[stage] ?? stage} (${index + 1}/${ANALYSIS_STAGE_ORDER.length})`;

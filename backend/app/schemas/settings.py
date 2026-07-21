@@ -19,6 +19,8 @@ class AppSettingsPublic(BaseModel):
     exclude_restricted_documents: bool
     allow_ocr: bool
     allow_lan_access: bool
+    cms_license_accepted: bool
+    cpt_license: bool
     local_data_notice: str = Field(
         default=(
             "This application is locally hosted, but model requests sent through "
@@ -46,3 +48,5 @@ class AppSettingsUpdate(BaseModel):
     exclude_restricted_documents: bool | None = None
     allow_ocr: bool | None = None
     allow_lan_access: bool | None = None
+    cms_license_accepted: bool | None = None
+    cpt_license: bool | None = None

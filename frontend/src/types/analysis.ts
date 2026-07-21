@@ -2,6 +2,69 @@ export type AnalysisStatus = "QUEUED" | "RUNNING" | "COMPLETE" | "FAILED" | "CAN
 export type Verdict = "GO" | "CONDITIONAL_GO" | "STOP";
 export type RiskLevel = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
+// quick_scan pipeline (v2 spec section 4) -- a different, fixed shape from
+// the legacy Finding/CodingCandidate rows, stored as JSON on the same
+// AnalysisRun row rather than a relational schema.
+export type MaturityState = "SCORED" | "NOT_SCORED";
+export type PillarStatus = "VERIFIED_POSITIVE" | "VERIFIED_NEGATIVE" | "MIXED" | "UNKNOWN" | "NA" | "RETRIEVAL_FAILURE";
+export type PillarName = "fda_status" | "coding" | "coverage" | "payment" | "evidence" | "billing_workflow";
+export type RiskFlag = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+export type DevStage =
+  | "concept"
+  | "investigational"
+  | "submission_pending"
+  | "authorized_prelaunch"
+  | "commercial"
+  | "restricted_or_recalled";
+
+export interface QuickScanIdentifier {
+  type: "510k" | "pma" | "denovo" | "product_code" | "udi" | "ncd" | "lcd" | "cpt" | "hcpcs";
+  value: string;
+  match_confidence: "exact" | "probable" | "uncertain";
+}
+
+export interface QuickScanPillar {
+  pillar: PillarName;
+  status: PillarStatus;
+  score: number | null;
+  finding: string;
+  detail: string;
+  citation: string | null;
+  gap: string | null;
+  action: "PROCEED" | "FIX" | "INVESTIGATE" | null;
+}
+
+export interface QuickScanAssessment {
+  product: {
+    name: string;
+    manufacturer: string;
+    fda_status: string;
+    identifiers: QuickScanIdentifier[];
+    dev_stage: DevStage;
+  };
+  scores: {
+    maturity: number | null;
+    maturity_state: MaturityState;
+    not_scored_reason: string | null;
+    assessment_coverage_pct: number;
+    research_confidence: number;
+    risk_flag: RiskFlag;
+    stage_context: string;
+  };
+  pillars: QuickScanPillar[];
+  top_gaps: string[];
+  next_steps: string[];
+  disclaimer: string;
+}
+
+export interface RetrievalProgressEntry {
+  status: "HIT" | "MISS" | "RETRIEVAL_FAILURE";
+  latency_ms: number;
+  data: Record<string, unknown> | null;
+  error: string | null;
+  match_confidence: string | null;
+}
+
 export interface AnalysisRun {
   id: string;
   project_id: string;
@@ -28,6 +91,11 @@ export interface AnalysisRun {
   cost_json: Record<string, number>;
   error_summary: string | null;
   created_at: string;
+  quick_scan_result_json: QuickScanAssessment | Record<string, never>;
+  retrieval_bundle_json: Record<string, unknown>;
+  retrieval_progress_json: Record<string, RetrievalProgressEntry>;
+  overrides_json: Record<string, { value: string; edited_at: string }>;
+  revision: number;
 }
 
 export interface Citation {

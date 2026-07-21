@@ -57,6 +57,17 @@ class AnalysisRun(UUIDPKMixin, TimestampMixin, Base):
     error_summary: Mapped[str | None] = mapped_column(Text)
     current_stage: Mapped[str | None] = mapped_column(String(128))
 
+    # quick_scan pipeline (analysis_type="quick_scan") -- a different JSON
+    # shape entirely (product/scores/6 fixed pillars) that doesn't map onto
+    # Finding/CodingCandidate/the FindingDomain enum, so it lives in its own
+    # JSONB columns rather than a relational schema. Left at their defaults
+    # ({}) for every legacy FULL_COMPLIANCE_ANALYSIS row.
+    quick_scan_result_json: Mapped[dict] = mapped_column(JSONB, default=dict)
+    retrieval_bundle_json: Mapped[dict] = mapped_column(JSONB, default=dict)
+    retrieval_progress_json: Mapped[dict] = mapped_column(JSONB, default=dict)
+    overrides_json: Mapped[dict] = mapped_column(JSONB, default=dict)
+    revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     findings: Mapped[list["Finding"]] = relationship(
         back_populates="analysis_run", cascade="all, delete-orphan"
     )

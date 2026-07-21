@@ -1,0 +1,51 @@
+"""Pure aggregation math for GET /metrics (v2 spec §7) -- kept separate from
+the FastAPI route so the percentile logic has a cheap, no-DB/HTTP unit test
+(app/api/v1/metrics.py owns fetching the rows and shaping the response)."""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+
+def percentile(values: list[float], pct: float) -> float | None:
+    """Nearest-rank percentile (pct in [0, 100]). None on an empty input --
+    callers decide how to render "no data" rather than this silently
+    returning 0, which would be indistinguishable from a genuine 0-second/
+    $0 run."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = max(1, math.ceil((pct / 100) * len(ordered)))
+    return ordered[rank - 1]
+
+
+@dataclass
+class RunSample:
+    wall_clock_seconds: float | None
+    cost_usd: float | None
+    not_scored: bool
+    token_usage: dict[str, dict[str, int]]
+
+
+def aggregate(samples: list[RunSample]) -> dict:
+    wall_clock = [s.wall_clock_seconds for s in samples if s.wall_clock_seconds is not None]
+    costs = [s.cost_usd for s in samples if s.cost_usd is not None]
+
+    stage_totals: dict[str, dict[str, int]] = {}
+    for s in samples:
+        for stage, usage in s.token_usage.items():
+            bucket = stage_totals.setdefault(stage, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+            for key in bucket:
+                bucket[key] += usage.get(key, 0)
+
+    return {
+        "sample_size": len(samples),
+        "wall_clock_p50_seconds": percentile(wall_clock, 50),
+        "wall_clock_p95_seconds": percentile(wall_clock, 95),
+        "cost_p50_usd": percentile(costs, 50),
+        "cost_p95_usd": percentile(costs, 95),
+        "cost_mean_usd": (sum(costs) / len(costs)) if costs else None,
+        "not_scored_rate": (sum(1 for s in samples if s.not_scored) / len(samples)) if samples else None,
+        "stage_token_totals": stage_totals,
+    }

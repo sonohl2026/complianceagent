@@ -39,6 +39,11 @@ class AnalysisRunRead(BaseModel):
     cost_json: dict
     error_summary: str | None
     created_at: datetime
+    quick_scan_result_json: dict
+    retrieval_bundle_json: dict
+    retrieval_progress_json: dict
+    overrides_json: dict
+    revision: int
 
 
 class CitationRead(BaseModel):

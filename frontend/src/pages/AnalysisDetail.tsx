@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import { CitationBadge } from "../components/CitationInspector";
 import { ExportButtons } from "../components/ExportButtons";
 import { PriorityFindingsPanel } from "../components/PriorityFindingsPanel";
+import { QuickScanDashboard } from "../components/quickScan/QuickScanDashboard";
 import { RiskBadge, VerdictBadge } from "../components/VerdictBadge";
 import { StatusBadge } from "../components/StatusBadge";
 import type { AnalysisRun, CodingCandidate, Finding } from "../types/analysis";
@@ -34,19 +35,23 @@ export function AnalysisDetail() {
 
   const { data: run } = useAnalysisPoll(analysisId!);
 
+  const isQuickScan = run?.analysis_type === "quick_scan";
+
   const { data: findings } = useQuery({
     queryKey: ["findings", analysisId],
     queryFn: () => api.get<Finding[]>(`/analyses/${analysisId}/findings`),
-    enabled: run?.status === "COMPLETE",
+    enabled: run?.status === "COMPLETE" && !isQuickScan,
   });
 
   const { data: codingCandidates } = useQuery({
     queryKey: ["coding-candidates", analysisId],
     queryFn: () => api.get<CodingCandidate[]>(`/analyses/${analysisId}/coding-candidates`),
-    enabled: run?.status === "COMPLETE",
+    enabled: run?.status === "COMPLETE" && !isQuickScan,
   });
 
   if (!run) return <p className="text-sm text-slate-500">Loading…</p>;
+
+  if (isQuickScan) return <QuickScanDashboard run={run} />;
 
   const domains = findings ? Array.from(new Set(findings.map((f) => f.domain))) : [];
   const filteredFindings =

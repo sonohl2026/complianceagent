@@ -27,6 +27,8 @@ def _to_public(data: dict) -> AppSettingsPublic:
         exclude_restricted_documents=data.get("exclude_restricted_documents", True),
         allow_ocr=data.get("allow_ocr", False),
         allow_lan_access=data.get("allow_lan_access", False),
+        cms_license_accepted=data.get("cms_license_accepted", False),
+        cpt_license=data.get("cpt_license", False),
     )
 
 

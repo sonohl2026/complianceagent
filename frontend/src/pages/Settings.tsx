@@ -195,6 +195,40 @@ export function Settings() {
         </label>
       </section>
 
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Quick Scan / Licensed Data
+        </h3>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={Boolean(data.cms_license_accepted)}
+            onChange={(e) => mutation.mutate({ cms_license_accepted: e.target.checked })}
+          />
+          <span>
+            Allow quick scan to fetch full LCD/Article text from CMS&apos;s licensed Coverage API
+            endpoints.
+            <span className="block text-xs text-slate-500 mt-1">
+              Enabling this allows the app to call CMS&apos;s License Agreement endpoint and accept
+              the AMA CPT, ADA CDT, and AHA UB-04 license agreements on your behalf when a scan
+              needs full coverage-document text. Turning this toggle on <strong>is</strong> your
+              acceptance of those license terms. Leave it off and quick scan still works — it just
+              relies on CMS&apos;s open, unlicensed coverage listings instead of full document text.
+            </span>
+          </span>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={Boolean(data.cpt_license)}
+            onChange={(e) => mutation.mutate({ cpt_license: e.target.checked })}
+          />
+          Show full CPT code descriptors (requires your own AMA CPT license — off by default,
+          shows code number + short paraphrase + official-lookup link only)
+        </label>
+      </section>
+
           <MasterPromptSection />
         </>
       )}

@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     openrouter_http_referer: str = "http://localhost:3000"
     openrouter_app_title: str = "MedTech Reimbursement Readiness Agent"
 
+    openfda_base_url: str = "https://api.fda.gov"
+    cms_coverage_base_url: str = "https://api.coverage.cms.gov"
+
     local_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_device: str = "cpu"
     embedding_batch_size: int = 16

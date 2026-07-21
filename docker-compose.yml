@@ -68,6 +68,7 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./backend/migrations:/app/migrations
+      - ./backend/benchmark_suite.json:/app/benchmark_suite.json
       - ./prompts:/app/prompts
       - ./scripts:/app/scripts
       - ./data/storage:/app/data/storage

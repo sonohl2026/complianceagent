@@ -31,6 +31,16 @@ DEFAULTS: dict[str, Any] = {
     "exclude_restricted_documents": True,
     "allow_ocr": False,
     "allow_lan_access": False,
+    # quick_scan pipeline: CMS Coverage API's licensed LCD/Article-detail
+    # endpoints are gated behind this flag. Flipping it on IS the user's own
+    # acceptance of the AMA CPT / ADA CDT / AHA UB-04 license agreements --
+    # this app never calls CMS's license-agreement endpoint on its own.
+    "cms_license_accepted": False,
+    # UI-side gate (v2 spec, section 5): even if a licensed CMS response ever
+    # contained a full CPT descriptor, the dashboard only shows the code
+    # number + a short paraphrase + an official-lookup link unless this is
+    # explicitly enabled.
+    "cpt_license": False,
 }
 
 

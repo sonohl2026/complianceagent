@@ -11,9 +11,11 @@ from app.api.v1 import (
     documents,
     health,
     jobs,
+    metrics,
     monitoring,
     projects,
     prompts,
+    quick_scans,
     retrieval,
     settings,
 )
@@ -28,9 +30,11 @@ api_router.include_router(authority.router, tags=["authority"])
 api_router.include_router(retrieval.router, tags=["retrieval"])
 api_router.include_router(crawls.router, tags=["crawls"])
 api_router.include_router(analyses.router, tags=["analyses"])
+api_router.include_router(quick_scans.router, tags=["quick_scans"])
 api_router.include_router(jobs.router, tags=["jobs"])
 api_router.include_router(prompts.router, tags=["prompts"])
 api_router.include_router(dashboard.router, tags=["dashboard"])
 api_router.include_router(claims.router, tags=["claims"])
 api_router.include_router(chat.router, tags=["chat"])
 api_router.include_router(monitoring.router, tags=["monitoring"])
+api_router.include_router(metrics.router, tags=["metrics"])

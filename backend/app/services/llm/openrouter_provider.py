@@ -183,8 +183,16 @@ class OpenRouterProvider:
     def _to_llm_result(response, parsed: dict, requested_model: str, *, schema_repair_attempted: bool) -> LLMResult:
         usage = response.usage
         cost_usd = None
+        metadata = {}
         if hasattr(response, "usage") and usage is not None:
             cost_usd = getattr(usage, "cost", None)
+            # OpenRouter/OpenAI-SDK extension field, not on every provider's
+            # response -- confirmed present (verified against a real call)
+            # but only non-zero when prompt caching actually took effect.
+            prompt_details = getattr(usage, "prompt_tokens_details", None)
+            if prompt_details is not None:
+                metadata["cached_tokens"] = getattr(prompt_details, "cached_tokens", None)
+                metadata["cache_write_tokens"] = getattr(prompt_details, "cache_write_tokens", None)
         return LLMResult(
             content=parsed,
             raw_content=response.choices[0].message.content or "",
@@ -197,4 +205,5 @@ class OpenRouterProvider:
             latency_ms=getattr(response, "_latency_ms", 0),
             finish_reason=response.choices[0].finish_reason if response.choices else None,
             schema_repair_attempted=schema_repair_attempted,
+            metadata=metadata,
         )
