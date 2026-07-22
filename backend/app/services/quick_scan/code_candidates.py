@@ -61,7 +61,7 @@ async def propose_llm_candidates(llm: LLMProvider, model: str, stage1: Stage1Ext
     return CandidateCodesResponse.model_validate(result.content).candidate_codes
 
 
-async def verify_candidates(candidates: list[str]) -> list[FeeScheduleEntry]:
+async def verify_candidates(candidates: list[str], table: str = "pfs") -> list[FeeScheduleEntry]:
     verified = []
     seen = set()
     for code in candidates:
@@ -69,7 +69,7 @@ async def verify_candidates(candidates: list[str]) -> list[FeeScheduleEntry]:
         if not code or code in seen or classify_code_format(code) == CodeFormat.UNKNOWN:
             continue
         seen.add(code)
-        entry = await cache.lookup("pfs", code)
+        entry = await cache.lookup(table, code)
         if entry is not None and entry.active:
             verified.append(entry)
     return verified
@@ -86,11 +86,11 @@ def _entry_to_evidence_dict(entry: FeeScheduleEntry) -> dict:
 
 
 async def resolve_fee_schedule_evidence(
-    llm: LLMProvider, model: str, stage1: Stage1Extraction, bundle: EvidenceBundle,
+    llm: LLMProvider, model: str, stage1: Stage1Extraction, bundle: EvidenceBundle, table: str = "pfs",
 ) -> SourceEvidence:
     sourced_hints = _sourced_hints_from_bundle(bundle)
     llm_candidates = await propose_llm_candidates(llm, model, stage1, sourced_hints)
-    verified = await verify_candidates(sourced_hints + llm_candidates)
+    verified = await verify_candidates(sourced_hints + llm_candidates, table=table)
 
     if not verified:
         return SourceEvidence(source="fee_schedule_lookup", status=RetrievalStatus.MISS, latency_ms=0)

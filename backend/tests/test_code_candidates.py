@@ -49,12 +49,22 @@ def test_extract_code_mentions_empty_text():
     assert extract_code_mentions(None) == []
 
 
+# Deliberately NOT "pfs" -- that's the real production table name. Using an
+# isolated name here is defense-in-depth on top of cache.py's own db-index
+# isolation (PYTEST_CURRENT_TEST routes every test to a separate Redis
+# database), not a substitute for it -- see the real incident this fixes in
+# cache.py's module docstring: a test that reused "pfs" for throwaway data
+# and deleted it in teardown silently wiped the real cached fee-schedule
+# data on every test run.
+_TEST_TABLE = "test_pfs_candidates"
+
+
 @pytest.fixture(autouse=True)
-async def _cleanup_pfs_table():
+async def _cleanup_test_table():
     yield
     client = cache._client()
     try:
-        await client.delete(cache._DATA_KEY_TEMPLATE.format(table="pfs"), cache._REFRESHED_AT_KEY_TEMPLATE.format(table="pfs"))
+        await client.delete(cache._DATA_KEY_TEMPLATE.format(table=_TEST_TABLE), cache._REFRESHED_AT_KEY_TEMPLATE.format(table=_TEST_TABLE))
     finally:
         await client.aclose()
 
@@ -62,26 +72,26 @@ async def _cleanup_pfs_table():
 async def test_verify_candidates_keeps_only_active_verified_codes():
     active = FeeScheduleEntry(code="76705", code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=86.17, status_code="A", description=None)
     inactive = FeeScheduleEntry(code="A4238", code_format=CodeFormat.HCPCS_LEVEL_II, active=False, source="pfs", payment_system="PFS", rate_usd=None, status_code="X", description="Adju cgm supply allowance")
-    await cache.store_table("pfs", {"76705": active, "A4238": inactive})
+    await cache.store_table(_TEST_TABLE, {"76705": active, "A4238": inactive})
 
-    verified = await verify_candidates(["76705", "A4238", "99999", "not-a-code"])
+    verified = await verify_candidates(["76705", "A4238", "99999", "not-a-code"], table=_TEST_TABLE)
     assert [e.code for e in verified] == ["76705"]  # inactive and nonexistent codes both dropped
 
 
 async def test_verify_candidates_deduplicates():
     active = FeeScheduleEntry(code="76705", code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=86.17, status_code="A", description=None)
-    await cache.store_table("pfs", {"76705": active})
-    verified = await verify_candidates(["76705", "76705", "76705"])
+    await cache.store_table(_TEST_TABLE, {"76705": active})
+    verified = await verify_candidates(["76705", "76705", "76705"], table=_TEST_TABLE)
     assert len(verified) == 1
 
 
 async def test_resolve_fee_schedule_evidence_hit_when_llm_candidate_verifies():
     active = FeeScheduleEntry(code="76705", code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=86.17, status_code="A", description=None)
-    await cache.store_table("pfs", {"76705": active})
+    await cache.store_table(_TEST_TABLE, {"76705": active})
 
     bundle = EvidenceBundle(sources={}, all_openfda_failed=False, all_cms_failed=False)
     llm = _FakeCandidateLLM(["76705"])
-    evidence = await resolve_fee_schedule_evidence(llm, "fake-model", _stage1(), bundle)
+    evidence = await resolve_fee_schedule_evidence(llm, "fake-model", _stage1(), bundle, table=_TEST_TABLE)
     assert evidence.status == RetrievalStatus.HIT
     assert evidence.data["verified_codes"][0]["code"] == "76705"
     assert evidence.data["verified_codes"][0]["description"] is None  # CPT format -- never shown
@@ -89,14 +99,14 @@ async def test_resolve_fee_schedule_evidence_hit_when_llm_candidate_verifies():
 
 async def test_resolve_fee_schedule_evidence_miss_when_nothing_verifies():
     bundle = EvidenceBundle(sources={}, all_openfda_failed=False, all_cms_failed=False)
-    llm = _FakeCandidateLLM(["00000"])  # not in the (empty) pfs table
-    evidence = await resolve_fee_schedule_evidence(llm, "fake-model", _stage1(), bundle)
+    llm = _FakeCandidateLLM(["00000"])  # not in the (empty) test table
+    evidence = await resolve_fee_schedule_evidence(llm, "fake-model", _stage1(), bundle, table=_TEST_TABLE)
     assert evidence.status == RetrievalStatus.MISS
 
 
 async def test_resolve_fee_schedule_evidence_uses_sourced_hints_from_cms_detail():
     active = FeeScheduleEntry(code="93000", code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=15.36, status_code="A", description=None)
-    await cache.store_table("pfs", {"93000": active})
+    await cache.store_table(_TEST_TABLE, {"93000": active})
 
     bundle = EvidenceBundle(
         sources={
@@ -108,6 +118,6 @@ async def test_resolve_fee_schedule_evidence_uses_sourced_hints_from_cms_detail(
         all_openfda_failed=False, all_cms_failed=False,
     )
     llm = _FakeCandidateLLM([])  # LLM proposes nothing -- the sourced hint alone should still verify
-    evidence = await resolve_fee_schedule_evidence(llm, "fake-model", _stage1(), bundle)
+    evidence = await resolve_fee_schedule_evidence(llm, "fake-model", _stage1(), bundle, table=_TEST_TABLE)
     assert evidence.status == RetrievalStatus.HIT
     assert evidence.data["verified_codes"][0]["code"] == "93000"
