@@ -6,6 +6,7 @@ from app.services.evidence_retrieval.types import RetrievalStatus
 
 _510K_URL = "https://api.fda.gov/device/510k.json"
 _CLASSIFICATION_URL = "https://api.fda.gov/device/classification.json"
+_RECALL_URL = "https://api.fda.gov/device/recall.json"
 
 
 @respx.mock
@@ -27,12 +28,14 @@ async def test_search_hits_real_shaped_response_for_lumineticscore():
 
 
 @respx.mock
-async def test_search_falls_back_through_manufacturer_then_aliases():
+async def test_search_falls_back_through_aliases_before_manufacturer():
+    # Order is name -> aliases -> manufacturer (not name -> manufacturer ->
+    # aliases): a device's own known alternate name is a stronger signal
+    # than its manufacturer's name, and manufacturer is the last resort.
     route = respx.get(_510K_URL).mock(
         side_effect=[
             httpx.Response(404, json={"error": {"code": "NOT_FOUND", "message": "No matches found!"}}),
-            httpx.Response(404, json={"error": {"code": "NOT_FOUND", "message": "No matches found!"}}),
-            httpx.Response(200, json={"results": [{"device_name": "matched via alias"}]}),
+            httpx.Response(200, json={"results": [{"device_name": "Real Alias Device", "applicant": "Some Co"}]}),
         ]
     )
     async with httpx.AsyncClient() as client:
@@ -40,8 +43,87 @@ async def test_search_falls_back_through_manufacturer_then_aliases():
             client, product_name="Unmatched Exact Name", manufacturer="Unmatched Mfr", aliases=["Real Alias"],
         )
     assert result.status == RetrievalStatus.HIT
-    assert result.match_confidence == "uncertain"
-    assert route.call_count == 3
+    assert result.match_confidence == "exact"
+    assert route.call_count == 2  # never reached the manufacturer fallback
+
+
+@respx.mock
+async def test_manufacturer_fallback_accepted_when_device_identity_verifies():
+    route = respx.get(_510K_URL).mock(
+        side_effect=[
+            httpx.Response(404, json={"error": {"code": "NOT_FOUND", "message": "No matches found!"}}),
+            httpx.Response(200, json={"results": [{"device_name": "SAPIEN 3 Ultra Valve", "applicant": "Edwards Lifesciences"}]}),
+        ]
+    )
+    async with httpx.AsyncClient() as client:
+        result = await openfda_client.search_510k(
+            client, product_name="SAPIEN 3", manufacturer="Edwards Lifesciences", aliases=[],
+        )
+    assert result.status == RetrievalStatus.HIT
+    # Verified, but only ever matched via the manufacturer's name (not the
+    # product's own name/alias) -- a real signal, but a weaker one.
+    assert result.match_confidence == "probable"
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_wrong_device_manufacturer_match_is_rejected_as_miss():
+    # The real bug this fixes: LumineticsCore's own name/alias search misses
+    # (FDA's records only know the pre-rebrand name "IDx-DR"), so it fell
+    # back to searching by manufacturer ("Digital Diagnostics") -- which
+    # matched Hologic's unrelated "Genius Digital Diagnostics System" purely
+    # because that string appears inside Hologic's own device name. A
+    # wrong-device hit must be rejected as MISS, never surfaced as evidence.
+    respx.get(_510K_URL).mock(
+        return_value=httpx.Response(200, json={
+            "results": [{"device_name": "Genius Digital Diagnostics System", "applicant": "Hologic, Inc."}],
+        })
+    )
+    async with httpx.AsyncClient() as client:
+        result = await openfda_client.search_510k(
+            client, product_name="LumineticsCore", manufacturer="Digital Diagnostics", aliases=["IDx-DR"],
+        )
+    assert result.status == RetrievalStatus.MISS
+
+
+@respx.mock
+async def test_free_text_endpoint_rejects_match_when_firm_does_not_correspond():
+    # Real case found live: Tandem's t:slim X2 recall notice literally says
+    # "...when using Dexcom G7 sensor" -- product_description substring-
+    # matches "Dexcom G7" without this being a Dexcom recall at all. recall/
+    # enforcement/event additionally require the firm field to plausibly
+    # match the target manufacturer.
+    respx.get(_RECALL_URL).mock(
+        return_value=httpx.Response(200, json={
+            "results": [{
+                "product_description": "t:slim X2 insulin pump ... when using Dexcom G7 sensor",
+                "recalling_firm": "Tandem Diabetes Care, Inc.",
+            }],
+        })
+    )
+    async with httpx.AsyncClient() as client:
+        result = await openfda_client.search_recall(
+            client, product_name="Dexcom G7", manufacturer="Dexcom", aliases=[],
+        )
+    assert result.status == RetrievalStatus.MISS
+
+
+@respx.mock
+async def test_free_text_endpoint_accepts_match_when_firm_corresponds():
+    respx.get(_RECALL_URL).mock(
+        return_value=httpx.Response(200, json={
+            "results": [{
+                "product_description": "Dexcom G7 Continuous Glucose Monitoring System sensor lot X",
+                "recalling_firm": "Dexcom, Inc.",
+            }],
+        })
+    )
+    async with httpx.AsyncClient() as client:
+        result = await openfda_client.search_recall(
+            client, product_name="Dexcom G7", manufacturer="Dexcom", aliases=[],
+        )
+    assert result.status == RetrievalStatus.HIT
+    assert result.match_confidence == "exact"
 
 
 @respx.mock
