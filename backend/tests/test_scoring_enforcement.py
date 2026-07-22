@@ -1,7 +1,9 @@
 from app.services.evidence_retrieval.orchestrator import EvidenceBundle
+from app.services.evidence_retrieval.types import RetrievalStatus, SourceEvidence
 from app.services.quick_scan.scoring_enforcement import (
     clamp_research_confidence,
     enforce,
+    enforce_fda_status_from_verified_hit,
     enforce_not_scored,
     recompute_coverage_pct,
     recompute_maturity,
@@ -33,6 +35,78 @@ def _assessment(pillars: list[Pillar], *, maturity: int | None, risk_flag: str =
 
 def _all_assessed_pillars(scores: list[int]) -> list[Pillar]:
     return [_pillar(name, "VERIFIED_POSITIVE", score) for name, score in zip(_PILLAR_NAMES, scores)]
+
+
+def _bundle_with_source(source: str, status: RetrievalStatus, match_confidence: str | None) -> EvidenceBundle:
+    return EvidenceBundle(
+        sources={source: SourceEvidence(source=source, status=status, latency_ms=100, match_confidence=match_confidence)},
+        all_openfda_failed=False, all_cms_failed=False,
+    )
+
+
+# --- fda_status-from-verified-hit rule (added after real-run testing found
+# fixture 5 flipping SCORED/NOT_SCORED run-to-run; see plan doc) ---
+
+def test_unknown_fda_status_promoted_by_exact_510k_hit():
+    pillars = [_pillar("fda_status", "UNKNOWN", None)] + [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES[1:]]
+    bundle = _bundle_with_source("openfda_510k", RetrievalStatus.HIT, "exact")
+    result = enforce_fda_status_from_verified_hit(pillars, bundle)
+    fda = next(p for p in result if p.pillar == "fda_status")
+    assert fda.status == "VERIFIED_POSITIVE"
+    assert fda.score == 70
+    assert "510k" in fda.finding
+
+
+def test_unknown_fda_status_promoted_by_exact_pma_or_classification_hit():
+    for source in ("openfda_pma", "openfda_classification"):
+        pillars = [_pillar("fda_status", "NA", None)] + [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES[1:]]
+        bundle = _bundle_with_source(source, RetrievalStatus.HIT, "exact")
+        result = enforce_fda_status_from_verified_hit(pillars, bundle)
+        assert next(p for p in result if p.pillar == "fda_status").status == "VERIFIED_POSITIVE"
+
+
+def test_unknown_fda_status_not_promoted_by_probable_hit():
+    pillars = [_pillar("fda_status", "UNKNOWN", None)] + [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES[1:]]
+    bundle = _bundle_with_source("openfda_510k", RetrievalStatus.HIT, "probable")
+    result = enforce_fda_status_from_verified_hit(pillars, bundle)
+    assert next(p for p in result if p.pillar == "fda_status").status == "UNKNOWN"
+
+
+def test_unknown_fda_status_not_promoted_with_no_hit_at_all():
+    pillars = [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES]
+    result = enforce_fda_status_from_verified_hit(pillars, _no_failure_bundle())
+    assert next(p for p in result if p.pillar == "fda_status").status == "UNKNOWN"
+
+
+def test_already_assessed_fda_status_never_second_guessed():
+    for status in ("VERIFIED_POSITIVE", "VERIFIED_NEGATIVE", "MIXED"):
+        pillars = [_pillar("fda_status", status, 40)] + [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES[1:]]
+        bundle = _bundle_with_source("openfda_510k", RetrievalStatus.HIT, "exact")
+        result = enforce_fda_status_from_verified_hit(pillars, bundle)
+        fda = next(p for p in result if p.pillar == "fda_status")
+        assert fda.status == status
+        assert fda.score == 40  # untouched, not re-scored to 70
+
+
+def test_enforce_end_to_end_promotes_fda_status_and_rescues_scoring():
+    # The real failure mode this closes: fda_status UNKNOWN despite a
+    # confirmed hit meant enforce_not_scored forced the whole run to
+    # NOT_SCORED even with 3 other pillars genuinely assessed.
+    pillars = [
+        _pillar("fda_status", "UNKNOWN", None),
+        _pillar("coding", "VERIFIED_POSITIVE", 75),
+        _pillar("coverage", "UNKNOWN", None),
+        _pillar("payment", "VERIFIED_POSITIVE", 70),
+        _pillar("evidence", "UNKNOWN", None),
+        _pillar("billing_workflow", "MIXED", 60),
+    ]
+    assessment = _assessment(pillars, maturity=None)
+    bundle = _bundle_with_source("openfda_510k", RetrievalStatus.HIT, "exact")
+    result = enforce(assessment, bundle)
+    assert result.scores.maturity_state == "SCORED"
+    assert result.scores.maturity is not None
+    promoted_fda = next(p for p in result.pillars if p.pillar == "fda_status")
+    assert promoted_fda.status == "VERIFIED_POSITIVE"
 
 
 # --- Rule 1: recompute_maturity ---

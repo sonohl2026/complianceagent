@@ -5,16 +5,58 @@ or network involved.
 """
 
 from app.services.evidence_retrieval.orchestrator import EvidenceBundle
+from app.services.evidence_retrieval.types import RetrievalStatus
 from app.services.quick_scan.schemas import Pillar, QuickScanAssessment, Scores
 
 _ASSESSED_STATUSES = {"VERIFIED_POSITIVE", "VERIFIED_NEGATIVE", "MIXED"}
 _MIN_ASSESSED_PILLARS = 3
 _MATURITY_DISAGREEMENT_THRESHOLD = 5
 _CONFIDENCE_CAP_ON_RETRIEVAL_FAILURE = 60
+_REGULATORY_IDENTITY_SOURCES = ("openfda_510k", "openfda_pma", "openfda_classification")
 
 
 def _assessed_pillars(pillars: list[Pillar]) -> list[Pillar]:
     return [p for p in pillars if p.status in _ASSESSED_STATUSES]
+
+
+def enforce_fda_status_from_verified_hit(pillars: list[Pillar], evidence: EvidenceBundle) -> list[Pillar]:
+    """A genuine, exact-confidence 510(k)/PMA/classification hit is
+    definitive proof the device has an FDA regulatory record -- not a
+    judgment call (confirmed empirically: Stage 3 is deterministic 14/14
+    times given fixed evidence including such a hit; the real-world
+    instability traced back to upstream evidence-shape variance between
+    runs, not Stage 3 misjudging a fixed shape -- see conversation record).
+    If Stage 3 still left fda_status UNKNOWN/NA despite an exact hit
+    existing, promote it in code rather than leave a whole run's
+    SCORED/NOT_SCORED outcome hostage to that one inconsistency, since
+    fda_status being assessed gates all scoring (enforce_not_scored below).
+
+    Deliberately narrow: never overrides a status Stage 3 already committed
+    to (VERIFIED_POSITIVE/VERIFIED_NEGATIVE/MIXED pass through untouched --
+    this only rescues UNKNOWN/NA), and only trusts an "exact" match, not a
+    "probable" one (e.g. the openFDA manufacturer-name fallback) -- that
+    weaker signal genuinely is closer to a judgment call."""
+    fda_pillar = next(p for p in pillars if p.pillar == "fda_status")
+    if fda_pillar.status not in ("UNKNOWN", "NA"):
+        return pillars
+
+    hit_source = next(
+        (
+            name for name in _REGULATORY_IDENTITY_SOURCES
+            if (e := evidence.sources.get(name)) and e.status == RetrievalStatus.HIT and e.match_confidence == "exact"
+        ),
+        None,
+    )
+    if hit_source is None:
+        return pillars
+
+    promoted = fda_pillar.model_copy(update={
+        "status": "VERIFIED_POSITIVE",
+        "score": fda_pillar.score if fda_pillar.score is not None else 70,
+        "finding": f"Confirmed FDA regulatory record found ({hit_source.replace('openfda_', '')}).",
+        "gap": "Synthesis left this UNKNOWN despite a confirmed regulatory record existing -- code-side correction applied.",
+    })
+    return [promoted if p.pillar == "fda_status" else p for p in pillars]
 
 
 def recompute_maturity(pillars: list[Pillar]) -> int | None:
@@ -56,13 +98,13 @@ def clamp_research_confidence(confidence: int, evidence: EvidenceBundle) -> int:
 
 
 def enforce(assessment: QuickScanAssessment, evidence: EvidenceBundle) -> QuickScanAssessment:
-    """Applies all 5 §3 rules in order, in code, regardless of what the model
+    """Applies all §3 rules in order, in code, regardless of what the model
     itself reported. Rule 5 (risk-flag independence) isn't a transform here --
     it's the invariant that risk_flag is never read by any of the functions
     above, so it structurally cannot influence the recomputed maturity;
     tests assert this by constructing two assessments identical except
     risk_flag and confirming enforce() produces identical maturity."""
-    pillars = assessment.pillars
+    pillars = enforce_fda_status_from_verified_hit(assessment.pillars, evidence)
 
     recomputed = recompute_maturity(pillars)
     model_reported = assessment.scores.maturity
@@ -91,4 +133,4 @@ def enforce(assessment: QuickScanAssessment, evidence: EvidenceBundle) -> QuickS
         risk_flag=assessment.scores.risk_flag,  # untouched by any rule above -- rule 5
         stage_context=assessment.scores.stage_context,
     )
-    return assessment.model_copy(update={"scores": new_scores})
+    return assessment.model_copy(update={"scores": new_scores, "pillars": pillars})
