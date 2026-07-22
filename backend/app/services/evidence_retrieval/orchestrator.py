@@ -12,6 +12,8 @@ whoever calls it.
 """
 
 import asyncio
+import html
+import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Protocol
 
@@ -19,6 +21,7 @@ import httpx
 
 from app.services.evidence_retrieval import cms_coverage_client, openfda_client
 from app.services.evidence_retrieval.types import RetrievalStatus, SourceEvidence
+from app.services.storage.settings_store import load_runtime_settings
 
 
 class Stage1Like(Protocol):
@@ -67,19 +70,76 @@ async def _run_openfda(client: httpx.AsyncClient, stage1: Stage1Like, on_progres
     return results
 
 
-async def _run_cms(client: httpx.AsyncClient, stage1: Stage1Like, on_progress: ProgressCallback | None) -> dict[str, SourceEvidence]:
+def _clean_text(value):
+    if not isinstance(value, str):
+        return value
+    return re.sub(r"<[^>]+>", " ", html.unescape(value)).strip()
+
+
+def _clean_document(document: dict) -> dict:
+    # CMS's detail responses HTML-escape and tag-wrap narrative fields (e.g.
+    # "&lt;p&gt;...&lt;/p&gt;") -- clean every string field generically rather
+    # than hardcoding per-resource field names (ncd/lcd/article each have a
+    # different set of narrative fields, and CMS can add more over time).
+    return {k: _clean_text(v) for k, v in document.items()}
+
+
+async def _fetch_top_match_detail(
+    client: httpx.AsyncClient, resource: str, listing_hit: SourceEvidence, settings: dict,
+) -> SourceEvidence | None:
+    matches = listing_hit.data.get("matches") or []
+    if not matches:
+        return None
+    top = matches[0]
+    doc_id, version = top.get("document_id"), top.get("document_version")
+    if doc_id is None or version is None:
+        return None
+    detail = await cms_coverage_client.get_licensed_document(client, resource, str(doc_id), str(version), settings)
+    if detail.status == RetrievalStatus.HIT:
+        detail.data = {**detail.data, "document": _clean_document(detail.data["document"])}
+    return detail
+
+
+async def _run_cms(
+    client: httpx.AsyncClient, stage1: Stage1Like, on_progress: ProgressCallback | None, settings: dict,
+) -> dict[str, SourceEvidence]:
+    # A listing match only confirms a coverage document EXISTS (title-only
+    # search); the actual coding/coverage narrative -- where a CMS "Billing
+    # and Coding" article would enumerate real CPT/HCPCS codes -- lives in
+    # the document's full body, fetched here via the already-built
+    # get_licensed_document (NCD is unlicensed; LCD/Article require
+    # settings["cms_license_accepted"], enforced by that function itself).
+    # Only the top-ranked match gets a detail fetch, to keep this to at most
+    # one extra HTTP call per resource rather than one per matched row.
     results: dict[str, SourceEvidence] = {}
     for resource in _CMS_RESOURCES:
         evidence = await cms_coverage_client.search_unlicensed(client, resource, stage1.candidate_search_terms)
         results[evidence.source] = evidence
         if on_progress is not None:
             await on_progress(evidence.source, evidence)
+
+        if evidence.status != RetrievalStatus.HIT:
+            continue
+        detail = await _fetch_top_match_detail(client, resource, evidence, settings)
+        if detail is None:
+            continue
+        results[detail.source] = detail
+        if on_progress is not None:
+            await on_progress(detail.source, detail)
     return results
 
 
-async def run_evidence_retrieval(stage1: Stage1Like, on_progress: ProgressCallback | None = None) -> EvidenceBundle:
+async def run_evidence_retrieval(
+    stage1: Stage1Like, on_progress: ProgressCallback | None = None, settings: dict | None = None,
+) -> EvidenceBundle:
+    # settings defaults to the real app settings store (cms_license_accepted
+    # etc.) so production call sites don't need to pass it; tests inject an
+    # explicit dict for determinism, matching cms_coverage_client's own test
+    # convention rather than depending on file-backed state.
+    if settings is None:
+        settings = load_runtime_settings()
     async with httpx.AsyncClient() as client:
-        openfda_results, cms_results = await _gather_both(client, stage1, on_progress)
+        openfda_results, cms_results = await _gather_both(client, stage1, on_progress, settings)
 
     all_sources = {**openfda_results, **cms_results}
     all_openfda_failed = bool(openfda_results) and all(
@@ -91,8 +151,8 @@ async def run_evidence_retrieval(stage1: Stage1Like, on_progress: ProgressCallba
     return EvidenceBundle(sources=all_sources, all_openfda_failed=all_openfda_failed, all_cms_failed=all_cms_failed)
 
 
-async def _gather_both(client, stage1, on_progress):
+async def _gather_both(client, stage1, on_progress, settings):
     openfda_task = _run_openfda(client, stage1, on_progress)
-    cms_task = _run_cms(client, stage1, on_progress)
+    cms_task = _run_cms(client, stage1, on_progress, settings)
     openfda_results, cms_results = await asyncio.gather(openfda_task, cms_task)
     return openfda_results, cms_results
