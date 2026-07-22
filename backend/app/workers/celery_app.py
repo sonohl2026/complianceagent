@@ -29,10 +29,18 @@ celery_app.conf.update(
             "task": "monitoring.dispatch_due_recrawls",
             "schedule": 1800.0,
         },
+        # PFS RVU files only change ~4x/year -- weekly is ample lead time,
+        # not trying to catch a same-day correction. refresh_pfs itself is
+        # a no-op-on-failure (keeps last-known-good data), so running this
+        # often is cheap and safe even if CMS's page structure drifts.
+        "refresh-pfs-fee-schedule": {
+            "task": "fee_schedule.refresh_pfs",
+            "schedule": 7 * 24 * 3600.0,
+        },
     },
 )
 
 # Task modules must be imported explicitly (not module-name "tasks", so
 # Celery's autodiscover_tasks convention doesn't apply) so their @celery_app.task
 # decorators register.
-from app.workers import crawl_tasks, ingestion_tasks, monitoring_tasks, quick_scan_tasks  # noqa: E402,F401
+from app.workers import crawl_tasks, fee_schedule_tasks, ingestion_tasks, monitoring_tasks, quick_scan_tasks  # noqa: E402,F401

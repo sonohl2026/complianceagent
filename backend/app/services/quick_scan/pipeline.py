@@ -9,14 +9,30 @@ sources resolving independently rather than one linear stage sequence.
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analysis import AnalysisRun
-from app.services.evidence_retrieval.orchestrator import run_evidence_retrieval
+from app.services.evidence_retrieval.orchestrator import EvidenceBundle, run_evidence_retrieval
 from app.services.evidence_retrieval.types import SourceEvidence
 from app.services.llm.base import LLMProvider, LLMResult
+from app.services.quick_scan.code_candidates import resolve_fee_schedule_evidence
 from app.services.quick_scan.schemas import Stage1Extraction
 from app.services.quick_scan.scoring_enforcement import enforce
 from app.services.quick_scan.stage1_extraction import run_stage1
 from app.services.quick_scan.stage3_synthesis import run_stage3
 from app.services.storage.settings_store import load_runtime_settings
+
+
+async def _add_fee_schedule_evidence(
+    llm: LLMProvider, extraction_model: str, stage1: Stage1Extraction, bundle: EvidenceBundle,
+) -> None:
+    # Device -> candidate code -> verify against real PFS data (closes the
+    # coding/payment pillar gap for devices with no dedicated NCD/LCD/
+    # Article -- see code_candidates.py). Mutates bundle.sources in place so
+    # Stage 3's evidence-bundle builder picks it up like any other source;
+    # never blocks the run if the LLM/lookup step itself fails.
+    try:
+        evidence = await resolve_fee_schedule_evidence(llm, extraction_model, stage1, bundle)
+    except Exception:  # noqa: BLE001 - a candidate-code failure must never take down quick_scan
+        return
+    bundle.sources[evidence.source] = evidence
 
 
 def _evidence_to_dict(evidence: SourceEvidence) -> dict:
@@ -73,6 +89,7 @@ async def run_quick_scan(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMPr
         await db.commit()
 
     bundle = await run_evidence_retrieval(stage1, on_progress=on_progress)
+    await _add_fee_schedule_evidence(llm, extraction_model, stage1, bundle)
 
     analysis_run.current_stage = "stage3_synthesis"
     await db.commit()
@@ -107,6 +124,7 @@ async def run_quick_scan_override(db: AsyncSession, analysis_run: AnalysisRun, l
     previously-extracted Stage1Extraction instead."""
     settings = load_runtime_settings()
     synthesis_model = settings.get("openrouter_synthesis_model") or model
+    extraction_model = settings.get("openrouter_extraction_model") or model
 
     record_usage = _make_usage_recorder(db, analysis_run)
 
@@ -126,6 +144,7 @@ async def run_quick_scan_override(db: AsyncSession, analysis_run: AnalysisRun, l
         await db.commit()
 
     bundle = await run_evidence_retrieval(stage1, on_progress=on_progress)
+    await _add_fee_schedule_evidence(llm, extraction_model, stage1, bundle)
 
     analysis_run.current_stage = "stage3_synthesis"
     await db.commit()

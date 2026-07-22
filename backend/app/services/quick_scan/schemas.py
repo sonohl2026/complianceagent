@@ -31,6 +31,16 @@ class Stage1Extraction(BaseModel):
     )
 
 
+class CandidateCodesResponse(BaseModel):
+    """Output of the candidate-code-proposal step (fee-schedule lookup --
+    see app/services/quick_scan/code_candidates.py). A hypothesis only:
+    every candidate is verified against real, current PFS data before it's
+    ever trusted -- see that module's verify_candidates()."""
+
+    model_config = _STRICT
+    candidate_codes: list[str] = Field(description="Plausible CPT/HCPCS codes for this device's procedure/supply category, or [] if none plausible")
+
+
 class Identifier(BaseModel):
     model_config = _STRICT
     type: str = Field(description="510k | pma | denovo | product_code | udi | ncd | lcd | cpt | hcpcs")
