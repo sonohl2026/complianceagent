@@ -2,6 +2,14 @@ import { useState } from "react";
 
 import type { QuickScanPillar } from "../../types/analysis";
 
+// AMA CPT descriptors are never reproduced by this app regardless of this
+// flag (Stage 3 itself is instructed never to write one, and the fee-schedule
+// evidence layer structurally never surfaces one -- see backend/app/services/
+// fee_schedule/code_format.py and quick_scan/code_candidates.py). This note
+// makes that boundary visible on the pillar that actually deals in codes,
+// rather than leaving it an invisible property a compliance reviewer has to
+// take on faith.
+
 // Fixed display order + labels for the 6 quick_scan pillars (spec §4) --
 // never sorted/filtered, so a pillar that came back UNKNOWN still shows up
 // in its slot rather than silently disappearing.
@@ -33,7 +41,7 @@ const ACTION_STYLE: Record<NonNullable<QuickScanPillar["action"]>, string> = {
   FIX: "bg-risk-critical/15 text-risk-critical",
 };
 
-export function PillarCard({ pillar }: { pillar: QuickScanPillar }) {
+export function PillarCard({ pillar, cptLicenseEnabled }: { pillar: QuickScanPillar; cptLicenseEnabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const status = STATUS_STYLE[pillar.status];
   const label = PILLAR_ORDER.find((p) => p.key === pillar.pillar)?.label ?? pillar.pillar;
@@ -95,6 +103,15 @@ export function PillarCard({ pillar }: { pillar: QuickScanPillar }) {
             <span className={`inline-block rounded px-2 py-0.5 text-[11px] font-medium ${ACTION_STYLE[pillar.action]}`}>
               {pillar.action}
             </span>
+          )}
+          {pillar.pillar === "coding" && (
+            <p className="text-[11px] text-slate-400 pt-1 border-t border-slate-100 dark:border-slate-900">
+              Codes are shown as number + short paraphrase only, never a full CPT descriptor
+              (AMA-licensed content) --{" "}
+              {cptLicenseEnabled
+                ? "cpt_license is enabled, but this app still never reproduces licensed descriptor text."
+                : "cpt_license is off by default in Settings."}
+            </p>
           )}
         </div>
       )}

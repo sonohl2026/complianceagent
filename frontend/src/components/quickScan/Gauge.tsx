@@ -7,6 +7,13 @@
 // supposed to carry via stage_context and the separate risk_flag pill.
 const ACCENT = "#0f766e"; // teal-700
 const TRACK = "#e2e8f0"; // slate-200
+const NOT_SCORED_STROKE = "#94a3b8"; // slate-400 -- deliberately not TRACK: a
+// NOT_SCORED reading must never render as "the same ring a real, even
+// zero-adjacent, score would produce." A real score (including 0, which the
+// schema forbids here anyway) always draws the solid 270-degree gauge arc
+// below; NOT_SCORED gets a genuinely different shape -- a full dashed ring,
+// never that arc -- so the two states can't be confused at a glance, without
+// having to read the caption text.
 
 export function Gauge({
   value,
@@ -25,35 +32,54 @@ export function Gauge({
   // full-circle "donut" read.
   const arcFraction = 0.75;
   const arcLength = circumference * arcFraction;
-  const filled = value === null ? 0 : (Math.max(0, Math.min(100, value)) / 100) * arcLength;
+  const isNotScored = value === null;
+  const filled = isNotScored ? 0 : (Math.max(0, Math.min(100, value)) / 100) * arcLength;
 
   return (
     <div className="flex flex-col items-center gap-1">
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="rotate-[135deg]">
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          fill="none"
-          stroke={TRACK}
-          strokeWidth={stroke}
-          strokeDasharray={`${arcLength} ${circumference}`}
-          strokeLinecap="round"
-          className="dark:opacity-20"
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          fill="none"
-          stroke={value === null ? TRACK : ACCENT}
-          strokeWidth={stroke}
-          strokeDasharray={`${filled} ${circumference}`}
-          strokeLinecap="round"
-        />
+        {isNotScored ? (
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            fill="none"
+            stroke={NOT_SCORED_STROKE}
+            strokeWidth={stroke}
+            strokeDasharray="3 7"
+            strokeLinecap="round"
+            className="dark:opacity-70"
+          />
+        ) : (
+          <>
+            <circle
+              cx={size / 2}
+              cy={size / 2}
+              r={r}
+              fill="none"
+              stroke={TRACK}
+              strokeWidth={stroke}
+              strokeDasharray={`${arcLength} ${circumference}`}
+              strokeLinecap="round"
+              className="dark:opacity-20"
+            />
+            <circle
+              cx={size / 2}
+              cy={size / 2}
+              r={r}
+              fill="none"
+              stroke={ACCENT}
+              strokeWidth={stroke}
+              strokeDasharray={`${filled} ${circumference}`}
+              strokeLinecap="round"
+            />
+          </>
+        )}
       </svg>
       <div className="-mt-16 flex h-24 w-24 flex-col items-center justify-center">
-        <span className="text-2xl font-semibold tabular-nums">{value === null ? "—" : Math.round(value)}</span>
+        <span className={`text-2xl font-semibold tabular-nums ${isNotScored ? "text-slate-400" : ""}`}>
+          {isNotScored ? "?" : Math.round(value as number)}
+        </span>
         {sublabel && <span className="text-[10px] text-slate-500">{sublabel}</span>}
       </div>
       <span className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-500">{label}</span>

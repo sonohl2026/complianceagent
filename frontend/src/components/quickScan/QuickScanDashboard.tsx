@@ -1,6 +1,10 @@
+import { useQuery } from "@tanstack/react-query";
+
+import { api } from "../../api/client";
 import { RiskBadge } from "../VerdictBadge";
 import { StatusBadge } from "../StatusBadge";
 import type { AnalysisRun, QuickScanAssessment } from "../../types/analysis";
+import type { AppSettings } from "../../types/settings";
 import { formatAnalysisStage } from "../../utils/analysisStages";
 import { Gauge } from "./Gauge";
 import { PILLAR_ORDER, PillarCard } from "./PillarCard";
@@ -15,6 +19,10 @@ function asResult(value: AnalysisRun["quick_scan_result_json"]): QuickScanAssess
 export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
   const isRunning = run.status === "QUEUED" || run.status === "RUNNING";
   const result = asResult(run.quick_scan_result_json);
+  // Same query key Settings.tsx uses -- shares its cache rather than
+  // double-fetching. Only read here to gate the coding pillar's CPT-license
+  // note (spec §5); never used to change what the pipeline itself does.
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => api.get<AppSettings>("/settings") });
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -103,7 +111,9 @@ export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {PILLAR_ORDER.map(({ key }) => {
                 const pillar = result.pillars.find((p) => p.pillar === key);
-                return pillar ? <PillarCard key={key} pillar={pillar} /> : null;
+                return pillar ? (
+                  <PillarCard key={key} pillar={pillar} cptLicenseEnabled={settings?.cpt_license ?? false} />
+                ) : null;
               })}
             </div>
           </section>
