@@ -59,6 +59,48 @@ def enforce_fda_status_from_verified_hit(pillars: list[Pillar], evidence: Eviden
     return [promoted if p.pillar == "fda_status" else p for p in pillars]
 
 
+def enforce_coding_from_verified_fee_schedule_hit(pillars: list[Pillar], evidence: EvidenceBundle) -> list[Pillar]:
+    """Same shape as enforce_fda_status_from_verified_hit above, for the same
+    reason: a fee_schedule_lookup HIT means code_candidates.py's
+    verify_candidates() already confirmed real, currently-active PFS codes
+    for this device before that evidence was ever marked HIT -- unlike
+    openFDA's fuzzy name matching, there's no further "exact"/"probable"
+    gradation to filter on here, a HIT already IS the verified fact. If
+    Stage 3 still left coding UNKNOWN/NA despite that, promote it in code
+    rather than leave a real, mechanically-verified fact hostage to Stage
+    3's demonstrated instability (see the flip-matrix measurement in
+    run_benchmark.py's module docstring -- coding was one of the pillars
+    that flipped status on fixture 5 across repeated calls against
+    identical frozen evidence).
+
+    Deliberately narrow, same as the fda_status rule: never overrides a
+    status Stage 3 already committed to (only rescues UNKNOWN/NA), and only
+    promotes when verified_codes is actually non-empty (an evidence-present
+    but code-empty HIT shouldn't happen given resolve_fee_schedule_evidence's
+    own MISS-on-empty behavior, but this doesn't assume that invariant
+    holds forever)."""
+    coding_pillar = next(p for p in pillars if p.pillar == "coding")
+    if coding_pillar.status not in ("UNKNOWN", "NA"):
+        return pillars
+
+    fee_schedule_evidence = evidence.sources.get("fee_schedule_lookup")
+    if fee_schedule_evidence is None or fee_schedule_evidence.status != RetrievalStatus.HIT:
+        return pillars
+
+    verified_codes = (fee_schedule_evidence.data or {}).get("verified_codes") or []
+    if not verified_codes:
+        return pillars
+
+    codes_str = ", ".join(c["code"] for c in verified_codes[:5])
+    promoted = coding_pillar.model_copy(update={
+        "status": "VERIFIED_POSITIVE",
+        "score": coding_pillar.score if coding_pillar.score is not None else 65,
+        "finding": f"Confirmed active billing code(s) found on the current PFS: {codes_str}.",
+        "gap": "Synthesis left this UNKNOWN despite verified, active fee-schedule codes existing -- code-side correction applied.",
+    })
+    return [promoted if p.pillar == "coding" else p for p in pillars]
+
+
 def recompute_maturity(pillars: list[Pillar]) -> int | None:
     """Rule 1: mean of score over assessed-only pillars. UNKNOWN/NA/
     RETRIEVAL_FAILURE pillars are dropped from numerator AND denominator --
@@ -105,6 +147,7 @@ def enforce(assessment: QuickScanAssessment, evidence: EvidenceBundle) -> QuickS
     tests assert this by constructing two assessments identical except
     risk_flag and confirming enforce() produces identical maturity."""
     pillars = enforce_fda_status_from_verified_hit(assessment.pillars, evidence)
+    pillars = enforce_coding_from_verified_fee_schedule_hit(pillars, evidence)
 
     recomputed = recompute_maturity(pillars)
     model_reported = assessment.scores.maturity

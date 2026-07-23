@@ -3,6 +3,7 @@ from app.services.evidence_retrieval.types import RetrievalStatus, SourceEvidenc
 from app.services.quick_scan.scoring_enforcement import (
     clamp_research_confidence,
     enforce,
+    enforce_coding_from_verified_fee_schedule_hit,
     enforce_fda_status_from_verified_hit,
     enforce_not_scored,
     recompute_coverage_pct,
@@ -107,6 +108,91 @@ def test_enforce_end_to_end_promotes_fda_status_and_rescues_scoring():
     assert result.scores.maturity is not None
     promoted_fda = next(p for p in result.pillars if p.pillar == "fda_status")
     assert promoted_fda.status == "VERIFIED_POSITIVE"
+
+
+# --- coding-from-verified-fee-schedule-hit rule (added after the flip-
+# matrix measurement showed coding flipping status on fixture 5 across
+# repeated calls against identical frozen evidence; same shape as the
+# fda_status rule above) ---
+
+def _bundle_with_fee_schedule_hit(codes: list[str]) -> EvidenceBundle:
+    return EvidenceBundle(
+        sources={"fee_schedule_lookup": SourceEvidence(
+            source="fee_schedule_lookup", status=RetrievalStatus.HIT, latency_ms=0,
+            data={"verified_codes": [{"code": c} for c in codes]},
+        )},
+        all_openfda_failed=False, all_cms_failed=False,
+    )
+
+
+def test_unknown_coding_promoted_by_verified_fee_schedule_hit():
+    pillars = [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES]
+    bundle = _bundle_with_fee_schedule_hit(["92229"])
+    result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
+    coding = next(p for p in result if p.pillar == "coding")
+    assert coding.status == "VERIFIED_POSITIVE"
+    assert coding.score == 65
+    assert "92229" in coding.finding
+
+
+def test_na_coding_promoted_by_verified_fee_schedule_hit():
+    pillars = [_pillar("coding", "NA", None)] + [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES if n != "coding"]
+    bundle = _bundle_with_fee_schedule_hit(["76705"])
+    result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
+    assert next(p for p in result if p.pillar == "coding").status == "VERIFIED_POSITIVE"
+
+
+def test_unknown_coding_not_promoted_on_fee_schedule_miss():
+    pillars = [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES]
+    bundle = EvidenceBundle(
+        sources={"fee_schedule_lookup": SourceEvidence(source="fee_schedule_lookup", status=RetrievalStatus.MISS, latency_ms=0)},
+        all_openfda_failed=False, all_cms_failed=False,
+    )
+    result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
+    assert next(p for p in result if p.pillar == "coding").status == "UNKNOWN"
+
+
+def test_unknown_coding_not_promoted_with_no_fee_schedule_source_at_all():
+    pillars = [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES]
+    result = enforce_coding_from_verified_fee_schedule_hit(pillars, _no_failure_bundle())
+    assert next(p for p in result if p.pillar == "coding").status == "UNKNOWN"
+
+
+def test_unknown_coding_not_promoted_when_hit_has_no_verified_codes():
+    # Defensive: a HIT with an empty verified_codes list shouldn't happen
+    # given resolve_fee_schedule_evidence's own MISS-on-empty behavior, but
+    # this rule doesn't assume that invariant holds forever.
+    pillars = [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES]
+    bundle = _bundle_with_fee_schedule_hit([])
+    result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
+    assert next(p for p in result if p.pillar == "coding").status == "UNKNOWN"
+
+
+def test_already_assessed_coding_never_second_guessed():
+    for status in ("VERIFIED_POSITIVE", "VERIFIED_NEGATIVE", "MIXED"):
+        pillars = [_pillar("coding", status, 40)] + [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES if n != "coding"]
+        bundle = _bundle_with_fee_schedule_hit(["92229"])
+        result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
+        coding = next(p for p in result if p.pillar == "coding")
+        assert coding.status == status
+        assert coding.score == 40  # untouched, not re-scored to 65
+
+
+def test_enforce_end_to_end_promotes_coding_and_rescues_scoring():
+    pillars = [
+        _pillar("fda_status", "VERIFIED_POSITIVE", 90),
+        _pillar("coding", "UNKNOWN", None),
+        _pillar("coverage", "UNKNOWN", None),
+        _pillar("payment", "VERIFIED_POSITIVE", 70),
+        _pillar("evidence", "UNKNOWN", None),
+        _pillar("billing_workflow", "MIXED", 60),
+    ]
+    assessment = _assessment(pillars, maturity=None)
+    bundle = _bundle_with_fee_schedule_hit(["92229"])
+    result = enforce(assessment, bundle)
+    promoted_coding = next(p for p in result.pillars if p.pillar == "coding")
+    assert promoted_coding.status == "VERIFIED_POSITIVE"
+    assert result.scores.maturity_state == "SCORED"  # now 3 assessed pillars, not 2
 
 
 # --- Rule 1: recompute_maturity ---
