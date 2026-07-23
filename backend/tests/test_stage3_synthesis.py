@@ -77,10 +77,10 @@ async def test_run_stage3_loads_system_prompt_v2_verbatim():
     assert "Informational market-access analysis only" in system_prompt
 
 
-async def test_run_stage3_uses_2000_max_tokens():
+async def test_run_stage3_uses_3000_max_tokens():
     fake_llm = _FakeLLMProvider(content=_VALID_ASSESSMENT)
     await run_stage3(fake_llm, "model", _stage1(), _bundle())
-    assert fake_llm.last_call_kwargs["max_tokens"] == 2000
+    assert fake_llm.last_call_kwargs["max_tokens"] == 3000
 
 
 async def test_run_stage3_raises_typed_error_when_repair_also_fails():

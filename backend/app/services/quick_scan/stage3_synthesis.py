@@ -18,7 +18,10 @@ from app.services.quick_scan.schemas import QuickScanAssessment
 from app.services.quick_scan.stage1_extraction import UsageCallback, wrap_untrusted_data
 from app.services.quick_scan.schemas import Stage1Extraction
 
-_MAX_OUTPUT_TOKENS = 2000
+_MAX_OUTPUT_TOKENS = 3000  # 2000 truncated mid-JSON-string on fixture 4 once the
+# uploaded-document block gave Stage 3 more to cite for the evidence pillar --
+# see conversation record. Headroom, not a redesign; schema still targets
+# ~1,500 tokens per system_prompt_v2.md.
 _MAX_EVIDENCE_BLOCK_CHARS = 1500 * 4  # ~1,500 tokens at ~4 chars/token, per source
 _MAX_UPLOADED_DOCUMENT_CHARS = 8000 * 4  # matches Stage 1's own truncation budget
 
