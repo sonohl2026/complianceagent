@@ -43,6 +43,13 @@ class OpenRouterProvider:
                 "HTTP-Referer": settings.openrouter_http_referer,
                 "X-Title": settings.openrouter_app_title,
             },
+            # No timeout here previously -- the SDK's own default is 600s,
+            # a production hang risk (a single stuck request could block a
+            # worker for 10 minutes before the existing retry logic even
+            # gets a chance to run). 60s is generous above every real
+            # latency observed for any single call in this app (typically
+            # well under 60s even for full quick_scan Stage 3 synthesis).
+            timeout=60.0,
         )
 
     async def structured_completion(
