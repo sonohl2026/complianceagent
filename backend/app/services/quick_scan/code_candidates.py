@@ -37,7 +37,7 @@ from app.services.fee_schedule.code_format import CodeFormat, classify_code_form
 from app.services.fee_schedule.types import FeeScheduleEntry
 from app.services.llm.base import LLMProvider
 from app.services.quick_scan.schemas import CandidateCodesResponse, Stage1Extraction
-from app.services.quick_scan.stage1_extraction import wrap_untrusted_data
+from app.services.quick_scan.stage1_extraction import UsageCallback, wrap_untrusted_data
 
 _MAX_OUTPUT_TOKENS = 1500  # a longer candidate list (each ~6-char code) can exceed a Stage-1-sized budget
 
@@ -66,7 +66,10 @@ def _sourced_hints_from_bundle(bundle: EvidenceBundle) -> list[str]:
     return hints
 
 
-async def propose_llm_candidates(llm: LLMProvider, model: str, stage1: Stage1Extraction, sourced_hints: list[str]) -> list[str]:
+async def propose_llm_candidates(
+    llm: LLMProvider, model: str, stage1: Stage1Extraction, sourced_hints: list[str],
+    on_usage: UsageCallback | None = None,
+) -> list[str]:
     module_prompt = load_module_prompt("quick_scan_code_candidates")
     hints_text = f"\nCode-shaped mentions already found in retrieved coverage documents: {sourced_hints}" if sourced_hints else ""
     user_message = wrap_untrusted_data(
@@ -78,11 +81,14 @@ async def propose_llm_candidates(llm: LLMProvider, model: str, stage1: Stage1Ext
         schema=schema, schema_name="quick_scan_code_candidates", model=model,
         temperature=0, max_tokens=_MAX_OUTPUT_TOKENS,
     )
+    if on_usage is not None:
+        await on_usage("fee_schedule_llm_candidates", result)
     return CandidateCodesResponse.model_validate(result.content).candidate_codes
 
 
 async def refine_candidates_from_descriptions(
     llm: LLMProvider, model: str, stage1: Stage1Extraction, candidates: dict[str, str],
+    on_usage: UsageCallback | None = None,
 ) -> list[str]:
     """Shows the model REAL (code, real-current-description) pairs pulled
     from the PFS registry and asks it to pick which, if any, match the
@@ -105,6 +111,8 @@ async def refine_candidates_from_descriptions(
         schema=schema, schema_name="quick_scan_code_refinement", model=model,
         temperature=0, max_tokens=_MAX_OUTPUT_TOKENS,
     )
+    if on_usage is not None:
+        await on_usage("fee_schedule_code_refinement", result)
     picked = CandidateCodesResponse.model_validate(result.content).candidate_codes
     # Never trust the model to only echo codes it was actually shown.
     return [code for code in picked if code in candidates]
@@ -136,6 +144,7 @@ def _entry_to_evidence_dict(entry: FeeScheduleEntry) -> dict:
 
 async def _description_matched_candidates(
     llm: LLMProvider, model: str, stage1: Stage1Extraction, table: str,
+    on_usage: UsageCallback | None = None,
 ) -> list[str]:
     description_index = await cache.get_description_index(table)
     if not description_index:
@@ -145,15 +154,16 @@ async def _description_matched_candidates(
     if not prefiltered_codes:
         return []
     prefiltered = {code: description_index[code] for code in prefiltered_codes}
-    return await refine_candidates_from_descriptions(llm, model, stage1, prefiltered)
+    return await refine_candidates_from_descriptions(llm, model, stage1, prefiltered, on_usage=on_usage)
 
 
 async def resolve_fee_schedule_evidence(
     llm: LLMProvider, model: str, stage1: Stage1Extraction, bundle: EvidenceBundle, table: str = "pfs",
+    on_usage: UsageCallback | None = None,
 ) -> SourceEvidence:
     sourced_hints = _sourced_hints_from_bundle(bundle)
-    llm_candidates = await propose_llm_candidates(llm, model, stage1, sourced_hints)
-    description_matches = await _description_matched_candidates(llm, model, stage1, table)
+    llm_candidates = await propose_llm_candidates(llm, model, stage1, sourced_hints, on_usage=on_usage)
+    description_matches = await _description_matched_candidates(llm, model, stage1, table, on_usage=on_usage)
     verified = await verify_candidates(sourced_hints + llm_candidates + description_matches, table=table)
 
     if not verified:

@@ -60,4 +60,29 @@ def test_aggregate_sums_stage_token_totals():
     result = aggregate(samples)
     assert result["stage_token_totals"]["stage1_extraction"] == {
         "prompt_tokens": 150, "completion_tokens": 30, "total_tokens": 180,
+        "cached_tokens": 0, "cache_write_tokens": 0,
     }
+
+
+def test_aggregate_sums_cached_tokens_and_tolerates_missing_ones(): # spec §7: cached-vs-uncached tracking
+    samples = [
+        RunSample(
+            wall_clock_seconds=1.0, cost_usd=0.01, not_scored=False,
+            token_usage={"stage3_synthesis": {
+                "prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
+                "cached_tokens": 80, "cache_write_tokens": 0,
+            }},
+        ),
+        RunSample(
+            # No prompt-caching details on this response at all (not every
+            # call gets a cache hit/write) -- must not crash the running sum.
+            wall_clock_seconds=1.0, cost_usd=0.01, not_scored=False,
+            token_usage={"stage3_synthesis": {
+                "prompt_tokens": 50, "completion_tokens": 10, "total_tokens": 60,
+                "cached_tokens": None, "cache_write_tokens": None,
+            }},
+        ),
+    ]
+    result = aggregate(samples)
+    assert result["stage_token_totals"]["stage3_synthesis"]["cached_tokens"] == 80
+    assert result["stage_token_totals"]["stage3_synthesis"]["cache_write_tokens"] == 0

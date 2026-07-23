@@ -144,16 +144,34 @@ def _load_fixtures() -> dict:
     return json.loads(path.read_text())
 
 
+class _CostAccumulator:
+    """Sums cost_usd across every LLM call made for one fixture -- Stage 1,
+    Stage 3, and the (previously cost-invisible -- see status report §2/§6)
+    fee-schedule candidate-proposal and refinement calls -- so the printed
+    table can carry a real per-fixture $ figure. Spec §6: "Store per-run
+    cost + latency next to results"; this harness previously only stored
+    latency."""
+
+    def __init__(self) -> None:
+        self.total_usd = 0.0
+
+    async def record(self, stage_name: str, result) -> None:  # noqa: ARG002 - matches UsageCallback shape
+        self.total_usd += result.cost_usd or 0.0
+
+
 async def _run_pipeline_for_fixture(fixture_id: int, dry_run: bool, real_llm, model: str, synthesis_model: str):
     source_text = FIXTURE_SOURCE_TEXT[fixture_id]
     llm = _DryRunLLM(fixture_id) if dry_run else real_llm
     extraction_model = "dry-run" if dry_run else model
-    stage1: Stage1Extraction = await run_stage1(llm, extraction_model, source_text)
+    cost = _CostAccumulator()
+    stage1: Stage1Extraction = await run_stage1(llm, extraction_model, source_text, on_usage=cost.record)
     bundle = await run_evidence_retrieval(stage1)
-    fee_schedule_evidence = await resolve_fee_schedule_evidence(llm, extraction_model, stage1, bundle)
+    fee_schedule_evidence = await resolve_fee_schedule_evidence(llm, extraction_model, stage1, bundle, on_usage=cost.record)
     bundle.sources[fee_schedule_evidence.source] = fee_schedule_evidence
-    assessment = await run_stage3(llm, "dry-run" if dry_run else synthesis_model, stage1, bundle, source_text=source_text)
-    return enforce(assessment, bundle), bundle
+    assessment = await run_stage3(
+        llm, "dry-run" if dry_run else synthesis_model, stage1, bundle, on_usage=cost.record, source_text=source_text,
+    )
+    return enforce(assessment, bundle), bundle, cost.total_usd
 
 
 async def _run_fixture_10(dry_run: bool, real_llm, model: str, synthesis_model: str):
@@ -170,7 +188,8 @@ async def _run_fixture_10(dry_run: bool, real_llm, model: str, synthesis_model: 
 
     llm = _DryRunLLM(10) if dry_run else real_llm
     source_text = FIXTURE_SOURCE_TEXT[10]
-    stage1 = await run_stage1(llm, "dry-run" if dry_run else model, source_text)
+    cost = _CostAccumulator()
+    stage1 = await run_stage1(llm, "dry-run" if dry_run else model, source_text, on_usage=cost.record)
 
     # respx's global patch blocks ANY unregistered httpx call while active
     # (including real OpenRouter calls in non-dry-run mode) -- scope it to
@@ -185,11 +204,13 @@ async def _run_fixture_10(dry_run: bool, real_llm, model: str, synthesis_model: 
     # matching how the real pipeline (pipeline.py) always runs this step
     # unconditionally.
     extraction_model = "dry-run" if dry_run else model
-    fee_schedule_evidence = await resolve_fee_schedule_evidence(llm, extraction_model, stage1, bundle)
+    fee_schedule_evidence = await resolve_fee_schedule_evidence(llm, extraction_model, stage1, bundle, on_usage=cost.record)
     bundle.sources[fee_schedule_evidence.source] = fee_schedule_evidence
 
-    assessment = await run_stage3(llm, "dry-run" if dry_run else synthesis_model, stage1, bundle, source_text=source_text)
-    return enforce(assessment, bundle), bundle
+    assessment = await run_stage3(
+        llm, "dry-run" if dry_run else synthesis_model, stage1, bundle, on_usage=cost.record, source_text=source_text,
+    )
+    return enforce(assessment, bundle), bundle, cost.total_usd
 
 
 def _classify(result, bundle, failures: list[str], expected: dict | None = None) -> str:
@@ -286,11 +307,12 @@ async def main() -> int:
         fixture_id = fixture["id"]
         started = time.monotonic()
         bundle = None
+        cost_usd = None
         try:
             if fixture_id == 10:
-                result, bundle = await _run_fixture_10(dry_run, real_llm, model, synthesis_model)
+                result, bundle, cost_usd = await _run_fixture_10(dry_run, real_llm, model, synthesis_model)
             else:
-                result, bundle = await _run_pipeline_for_fixture(fixture_id, dry_run, real_llm, model, synthesis_model)
+                result, bundle, cost_usd = await _run_pipeline_for_fixture(fixture_id, dry_run, real_llm, model, synthesis_model)
             elapsed = time.monotonic() - started
             failures = _check_expectations(result, fixture["expected"]) + _check_invariants(result, fixture)
         except Exception as exc:  # noqa: BLE001 - a fixture-level crash is itself a failure to report, not to propagate
@@ -305,12 +327,19 @@ async def main() -> int:
             "elapsed_s": round(elapsed, 2), "failures": failures,
             "maturity": result.scores.maturity if result else None,
             "maturity_state": result.scores.maturity_state if result else "CRASHED",
+            "cost_usd": round(cost_usd, 4) if cost_usd is not None else None,
         })
 
-    print(f"\n{'ID':<4}{'Name':<45}{'State':<12}{'Maturity':<10}{'Time':<8}{'Result'}")
-    print("-" * 100)
+    print(f"\n{'ID':<4}{'Name':<45}{'State':<12}{'Maturity':<10}{'Time':<8}{'Cost':<9}{'Result'}")
+    print("-" * 110)
+    total_cost = 0.0
     for row in rows:
-        print(f"{row['id']:<4}{row['name'][:43]:<45}{row['maturity_state']:<12}{str(row['maturity']):<10}{row['elapsed_s']:<8}{row['status']}")
+        cost_str = f"${row['cost_usd']:.4f}" if row["cost_usd"] is not None else "—"
+        total_cost += row["cost_usd"] or 0.0
+        print(
+            f"{row['id']:<4}{row['name'][:43]:<45}{row['maturity_state']:<12}{str(row['maturity']):<10}"
+            f"{row['elapsed_s']:<8}{cost_str:<9}{row['status']}"
+        )
         for failure in row["failures"]:
             print(f"      -> {failure}")
 
@@ -320,7 +349,7 @@ async def main() -> int:
     print(
         f"\n{n_passed}/{len(rows)} fixtures passed outright, {n_known_gap} known-gap "
         f"(documented Stage-2 coding/coverage/payment data limitation, see module docstring), "
-        f"{n_failed} failed. Mode: {'DRY_RUN_LLM' if dry_run else 'REAL (costed)'}"
+        f"{n_failed} failed. Total cost: ${total_cost:.4f}. Mode: {'DRY_RUN_LLM' if dry_run else 'REAL (costed)'}"
     )
     return 1 if any_failed else 0
 

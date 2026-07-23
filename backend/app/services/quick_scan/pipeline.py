@@ -15,21 +15,27 @@ from app.services.llm.base import LLMProvider, LLMResult
 from app.services.quick_scan.code_candidates import resolve_fee_schedule_evidence
 from app.services.quick_scan.schemas import Stage1Extraction
 from app.services.quick_scan.scoring_enforcement import enforce
-from app.services.quick_scan.stage1_extraction import run_stage1
+from app.services.quick_scan.stage1_extraction import UsageCallback, run_stage1
 from app.services.quick_scan.stage3_synthesis import run_stage3
 from app.services.storage.settings_store import load_runtime_settings
 
 
 async def _add_fee_schedule_evidence(
     llm: LLMProvider, extraction_model: str, stage1: Stage1Extraction, bundle: EvidenceBundle,
+    on_usage: UsageCallback,
 ) -> None:
     # Device -> candidate code -> verify against real PFS data (closes the
     # coding/payment pillar gap for devices with no dedicated NCD/LCD/
     # Article -- see code_candidates.py). Mutates bundle.sources in place so
     # Stage 3's evidence-bundle builder picks it up like any other source;
     # never blocks the run if the LLM/lookup step itself fails.
+    #
+    # on_usage is threaded through so its (up to 2) LLM calls are never
+    # cost-invisible -- previously this was the one call path in the whole
+    # pipeline whose tokens/cost never reached token_usage_json/cost_json/
+    # /metrics at all (see status report, section 2/6).
     try:
-        evidence = await resolve_fee_schedule_evidence(llm, extraction_model, stage1, bundle)
+        evidence = await resolve_fee_schedule_evidence(llm, extraction_model, stage1, bundle, on_usage=on_usage)
     except Exception:  # noqa: BLE001 - a candidate-code failure must never take down quick_scan
         return
     bundle.sources[evidence.source] = evidence
@@ -51,12 +57,18 @@ def _make_usage_recorder(db: AsyncSession, analysis_run: AnalysisRun):
     # callback instead of changing their return type (which test/bench
     # harness call sites rely on staying a bare parsed-model return).
     async def _record(stage_name: str, result: LLMResult) -> None:
+        # cached_tokens/cache_write_tokens were previously read off the raw
+        # OpenRouter response (openrouter_provider.py::_to_llm_result) into
+        # LLMResult.metadata and then discarded here -- spec §7 asks for
+        # cached-vs-uncached tracking explicitly; this is the fix.
         analysis_run.token_usage_json = {
             **analysis_run.token_usage_json,
             stage_name: {
                 "prompt_tokens": result.prompt_tokens,
                 "completion_tokens": result.completion_tokens,
                 "total_tokens": result.total_tokens,
+                "cached_tokens": result.metadata.get("cached_tokens"),
+                "cache_write_tokens": result.metadata.get("cache_write_tokens"),
             },
         }
         if result.cost_usd is not None:
@@ -89,7 +101,7 @@ async def run_quick_scan(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMPr
         await db.commit()
 
     bundle = await run_evidence_retrieval(stage1, on_progress=on_progress)
-    await _add_fee_schedule_evidence(llm, extraction_model, stage1, bundle)
+    await _add_fee_schedule_evidence(llm, extraction_model, stage1, bundle, record_usage)
 
     analysis_run.current_stage = "stage3_synthesis"
     await db.commit()
@@ -144,7 +156,7 @@ async def run_quick_scan_override(db: AsyncSession, analysis_run: AnalysisRun, l
         await db.commit()
 
     bundle = await run_evidence_retrieval(stage1, on_progress=on_progress)
-    await _add_fee_schedule_evidence(llm, extraction_model, stage1, bundle)
+    await _add_fee_schedule_evidence(llm, extraction_model, stage1, bundle, record_usage)
 
     analysis_run.current_stage = "stage3_synthesis"
     await db.commit()

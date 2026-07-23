@@ -32,12 +32,19 @@ def aggregate(samples: list[RunSample]) -> dict:
     wall_clock = [s.wall_clock_seconds for s in samples if s.wall_clock_seconds is not None]
     costs = [s.cost_usd for s in samples if s.cost_usd is not None]
 
+    # cached_tokens/cache_write_tokens are None whenever a stage's response
+    # didn't report prompt-caching details at all (not every call gets a
+    # cache hit/write, and not every provider surfaces the field) -- summed
+    # as 0 in that case rather than breaking the running total, but see
+    # note below: a stage where EVERY sample was None gets 0, not None,
+    # since these are running sums, not an aggregate.
+    _STAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens", "cache_write_tokens")
     stage_totals: dict[str, dict[str, int]] = {}
     for s in samples:
         for stage, usage in s.token_usage.items():
-            bucket = stage_totals.setdefault(stage, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+            bucket = stage_totals.setdefault(stage, {key: 0 for key in _STAGE_KEYS})
             for key in bucket:
-                bucket[key] += usage.get(key, 0)
+                bucket[key] += usage.get(key, 0) or 0
 
     return {
         "sample_size": len(samples),
