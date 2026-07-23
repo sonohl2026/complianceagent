@@ -47,7 +47,10 @@ async def _run(job_id: str, analysis_run_id: str, *, override: bool) -> None:
             model = runtime_settings.get("openrouter_model") or ""
 
             try:
-                llm = OpenRouterProvider(api_key=runtime_settings.get("openrouter_api_key"))
+                llm = OpenRouterProvider(
+                    api_key=runtime_settings.get("openrouter_api_key"),
+                    prompt_caching=runtime_settings.get("openrouter_prompt_caching", True),
+                )
                 if override:
                     await run_quick_scan_override(db, analysis_run, llm, model)
                 else:

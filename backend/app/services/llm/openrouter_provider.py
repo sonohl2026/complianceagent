@@ -29,10 +29,20 @@ BASE_BACKOFF_SECONDS = 1.5
 
 
 class OpenRouterProvider:
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, prompt_caching: bool = True):
         settings = get_settings()
         self._settings = settings
         self._api_key = api_key or settings.openrouter_api_key
+        # Was previously a fully inert runtime setting (openrouter_prompt_
+        # caching existed in Settings, defaulted True, was never read by this
+        # class at all) -- confirmed via 9 real Stage-3 calls all reporting
+        # cached_tokens=0/cache_write_tokens=0 despite the same large,
+        # byte-identical system prompt on every call. Root cause: Anthropic's
+        # API (which this flows through unmodified) requires an explicit
+        # cache_control breakpoint on the content block to opt in -- content
+        # being merely identical across calls does not trigger caching on
+        # its own. See _build_system_message below for the actual fix.
+        self._prompt_caching = prompt_caching
         if not self._api_key:
             raise LLMProviderError("No OpenRouter API key configured. Set it in Settings first.")
 
@@ -70,7 +80,7 @@ class OpenRouterProvider:
                 "before running an analysis (e.g. 'anthropic/claude-sonnet-4.5', not a 'latest' alias)."
             )
 
-        full_messages = [{"role": "system", "content": system_prompt}, *messages]
+        full_messages = [self._build_system_message(system_prompt), *messages]
         response_format = {
             "type": "json_schema",
             "json_schema": {"name": schema_name, "schema": schema, "strict": True},
@@ -125,6 +135,19 @@ class OpenRouterProvider:
                     f"Structured output for {schema_name!r} failed schema validation twice: {second_exc}"
                 ) from second_exc
             return self._to_llm_result(repaired, parsed, model, schema_repair_attempted=True)
+
+    def _build_system_message(self, system_prompt: str) -> dict:
+        if not self._prompt_caching:
+            return {"role": "system", "content": system_prompt}
+        # Anthropic (and OpenRouter's pass-through of it) requires an
+        # explicit cache_control breakpoint on a content block -- a plain
+        # string body, even if byte-identical across every call, is never
+        # cached on its own. This marks the whole system prompt (the static,
+        # reused-every-call part) as a cache breakpoint.
+        return {
+            "role": "system",
+            "content": [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+        }
 
     async def _call_with_retry(self, **kwargs):
         last_exc: Exception | None = None

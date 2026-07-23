@@ -31,8 +31,47 @@ def _chat_response(content: dict, *, model="anthropic/claude-sonnet-4.5", finish
     }
 
 
-def _provider() -> OpenRouterProvider:
-    return OpenRouterProvider(api_key="sk-or-test-key")
+def _provider(prompt_caching: bool = True) -> OpenRouterProvider:
+    return OpenRouterProvider(api_key="sk-or-test-key", prompt_caching=prompt_caching)
+
+
+# --- prompt caching (previously a fully inert setting -- see
+# openrouter_provider.py's constructor comment; confirmed via 9 real Stage-3
+# calls all reporting cached_tokens=0 despite an identical, large system
+# prompt on every call) ---
+
+@respx.mock
+async def test_prompt_caching_on_sends_cache_control_breakpoint():
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_chat_response({"verdict": "GO", "risk": "LOW"}))
+    )
+    provider = _provider(prompt_caching=True)
+    await provider.structured_completion(
+        system_prompt="a long, reused system prompt",
+        messages=[{"role": "user", "content": "hi"}],
+        schema=SCHEMA, schema_name="test_schema", model="anthropic/claude-sonnet-4.5",
+    )
+    sent_body = json.loads(route.calls.last.request.content)
+    system_message = sent_body["messages"][0]
+    assert system_message["role"] == "system"
+    assert system_message["content"] == [
+        {"type": "text", "text": "a long, reused system prompt", "cache_control": {"type": "ephemeral"}}
+    ]
+
+
+@respx.mock
+async def test_prompt_caching_off_sends_plain_string():
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_chat_response({"verdict": "GO", "risk": "LOW"}))
+    )
+    provider = _provider(prompt_caching=False)
+    await provider.structured_completion(
+        system_prompt="a long, reused system prompt",
+        messages=[{"role": "user", "content": "hi"}],
+        schema=SCHEMA, schema_name="test_schema", model="anthropic/claude-sonnet-4.5",
+    )
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body["messages"][0] == {"role": "system", "content": "a long, reused system prompt"}
 
 
 @respx.mock

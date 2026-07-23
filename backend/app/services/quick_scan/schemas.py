@@ -75,10 +75,20 @@ class Pillar(BaseModel):
     pillar: str = Field(description="fda_status | coding | coverage | payment | evidence | billing_workflow")
     status: str = Field(description="VERIFIED_POSITIVE | VERIFIED_NEGATIVE | MIXED | UNKNOWN | NA | RETRIEVAL_FAILURE")
     score: int | None = Field(description="0-100, or null when status is UNKNOWN/NA/RETRIEVAL_FAILURE")
-    finding: str = Field(description="max 200 chars, one sentence")
-    detail: str = Field(description="max 800 chars, nuance goes here")
+    finding: str = Field(max_length=250, description="max 200 chars, one sentence")
+    # Was "max 800 chars" (hint-only, no real constraint -- spec §4 actually
+    # specifies maxLength:800 as a real JSON Schema keyword; this had drifted
+    # to a description-text hint the model wasn't structurally held to).
+    # Measured: detail carried 40% of total Stage-3 output chars across a
+    # real 9-fixture sample, the single largest lever on output size/latency/
+    # cost. Tightened to a real 400-char *target* (stated in the hint, which
+    # the model empirically follows -- it was already averaging well under
+    # the old 800 hint on its own) with a genuine max_length=500 backstop
+    # (25% headroom) so an overshoot fails Pydantic validation and triggers
+    # the existing one-repair-pass path instead of silently ignoring it.
+    detail: str = Field(max_length=500, description="max 400 chars, nuance goes here -- 1-2 sentences, not a paragraph")
     citation: str | None = Field(description="URL from the evidence bundle only, or null")
-    gap: str | None
+    gap: str | None = Field(max_length=250, description="max 200 chars, one sentence, or null")
     action: str | None = Field(description="PROCEED | FIX | INVESTIGATE | null")
 
 

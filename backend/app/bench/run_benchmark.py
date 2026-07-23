@@ -302,7 +302,10 @@ async def main() -> int:
         from app.services.storage.settings_store import load_runtime_settings
 
         settings = load_runtime_settings()
-        real_llm = OpenRouterProvider(api_key=settings.get("openrouter_api_key"))
+        real_llm = OpenRouterProvider(
+            api_key=settings.get("openrouter_api_key"),
+            prompt_caching=settings.get("openrouter_prompt_caching", True),
+        )
         model = settings.get("openrouter_extraction_model") or settings.get("openrouter_model")
         synthesis_model = settings.get("openrouter_synthesis_model") or settings.get("openrouter_model")
 

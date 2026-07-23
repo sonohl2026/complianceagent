@@ -18,10 +18,15 @@ from app.services.quick_scan.schemas import QuickScanAssessment
 from app.services.quick_scan.stage1_extraction import UsageCallback, wrap_untrusted_data
 from app.services.quick_scan.schemas import Stage1Extraction
 
-_MAX_OUTPUT_TOKENS = 3000  # 2000 truncated mid-JSON-string on fixture 4 once the
-# uploaded-document block gave Stage 3 more to cite for the evidence pillar --
-# see conversation record. Headroom, not a redesign; schema still targets
-# ~1,500 tokens per system_prompt_v2.md.
+_MAX_OUTPUT_TOKENS = 2500  # Right-sized after schemas.py's Pillar.detail/gap
+# tightening (finding/detail/gap now carry real max_length constraints, not
+# just description-text hints -- see schemas.py). Measured completion_tokens
+# post-tightening across 4 real fixtures: 1519-1896 (was 2236-2542 pre-
+# tightening on the same/comparable fixtures, ~17% reduction). 2500 gives
+# ~30% headroom above the observed max, well below the 3000 that itself
+# followed a real truncation incident (fixture 4, see git history) -- if
+# output size grows again later (e.g. more evidence sources added), re-
+# measure before assuming this margin still holds.
 _MAX_EVIDENCE_BLOCK_CHARS = 1500 * 4  # ~1,500 tokens at ~4 chars/token, per source
 _MAX_UPLOADED_DOCUMENT_CHARS = 8000 * 4  # matches Stage 1's own truncation budget
 
