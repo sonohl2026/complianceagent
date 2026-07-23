@@ -93,7 +93,7 @@ async def run_quick_scan(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMPr
 
     analysis_run.current_stage = "stage3_synthesis"
     await db.commit()
-    assessment = await run_stage3(llm, synthesis_model, stage1, bundle, on_usage=record_usage)
+    assessment = await run_stage3(llm, synthesis_model, stage1, bundle, on_usage=record_usage, source_text=source_text)
 
     enforced = enforce(assessment, bundle)
 
@@ -148,7 +148,8 @@ async def run_quick_scan_override(db: AsyncSession, analysis_run: AnalysisRun, l
 
     analysis_run.current_stage = "stage3_synthesis"
     await db.commit()
-    assessment = await run_stage3(llm, synthesis_model, stage1, bundle, on_usage=record_usage)
+    source_text = analysis_run.input_snapshot_json.get("source_text", "")
+    assessment = await run_stage3(llm, synthesis_model, stage1, bundle, on_usage=record_usage, source_text=source_text)
     enforced = enforce(assessment, bundle)
 
     analysis_run.quick_scan_result_json = enforced.model_dump()

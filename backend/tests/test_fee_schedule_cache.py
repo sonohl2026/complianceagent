@@ -16,6 +16,7 @@ async def _cleanup():
         await client.delete(
             cache._DATA_KEY_TEMPLATE.format(table=_TEST_TABLE),
             cache._REFRESHED_AT_KEY_TEMPLATE.format(table=_TEST_TABLE),
+            cache._DESCRIPTION_INDEX_KEY_TEMPLATE.format(table=_TEST_TABLE),
         )
     finally:
         await client.aclose()
@@ -53,6 +54,27 @@ async def test_last_refreshed_at_set_on_store():
     assert await cache.last_refreshed_at(_TEST_TABLE) is None
     await cache.store_table(_TEST_TABLE, {})
     assert await cache.last_refreshed_at(_TEST_TABLE) is not None
+
+
+async def test_description_index_round_trip():
+    await cache.store_description_index(_TEST_TABLE, {"92229": "Img rta detc/mntr ds poc aly"})
+    assert await cache.get_description_index(_TEST_TABLE) == {"92229": "Img rta detc/mntr ds poc aly"}
+
+
+async def test_description_index_empty_before_store():
+    assert await cache.get_description_index(_TEST_TABLE) == {}
+
+
+async def test_description_index_is_separate_from_public_entries():
+    # store_table()'s public FeeScheduleEntry.description is suppressed for
+    # CPT formats; the internal description index is a completely separate
+    # key so this doesn't create an accidental second path to the same data.
+    entry = FeeScheduleEntry(code="92229", code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=46.76, status_code="A", description=None)
+    await cache.store_table(_TEST_TABLE, {"92229": entry})
+    await cache.store_description_index(_TEST_TABLE, {"92229": "Img rta detc/mntr ds poc aly"})
+    looked_up = await cache.lookup(_TEST_TABLE, "92229")
+    assert looked_up.description is None  # public path still suppressed
+    assert (await cache.get_description_index(_TEST_TABLE))["92229"] == "Img rta detc/mntr ds poc aly"
 
 
 async def test_pytest_writes_never_reach_production_db_even_under_the_real_table_name():

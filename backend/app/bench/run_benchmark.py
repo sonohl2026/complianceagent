@@ -95,7 +95,7 @@ class _DryRunLLM:
 
         if kwargs["schema_name"] == "quick_scan_stage1":
             content = DRY_RUN_STAGE1[self.fixture_id]
-        elif kwargs["schema_name"] == "quick_scan_code_candidates":
+        elif kwargs["schema_name"] in ("quick_scan_code_candidates", "quick_scan_code_refinement"):
             content = {"candidate_codes": []}  # dry-run validates plumbing, not fee-schedule data quality
         else:
             content = dry_run_stage3_response(self.fixture_id)
@@ -119,7 +119,7 @@ async def _run_pipeline_for_fixture(fixture_id: int, dry_run: bool, real_llm, mo
     bundle = await run_evidence_retrieval(stage1)
     fee_schedule_evidence = await resolve_fee_schedule_evidence(llm, extraction_model, stage1, bundle)
     bundle.sources[fee_schedule_evidence.source] = fee_schedule_evidence
-    assessment = await run_stage3(llm, "dry-run" if dry_run else synthesis_model, stage1, bundle)
+    assessment = await run_stage3(llm, "dry-run" if dry_run else synthesis_model, stage1, bundle, source_text=source_text)
     return enforce(assessment, bundle), bundle
 
 
@@ -155,7 +155,7 @@ async def _run_fixture_10(dry_run: bool, real_llm, model: str, synthesis_model: 
     fee_schedule_evidence = await resolve_fee_schedule_evidence(llm, extraction_model, stage1, bundle)
     bundle.sources[fee_schedule_evidence.source] = fee_schedule_evidence
 
-    assessment = await run_stage3(llm, "dry-run" if dry_run else synthesis_model, stage1, bundle)
+    assessment = await run_stage3(llm, "dry-run" if dry_run else synthesis_model, stage1, bundle, source_text=source_text)
     return enforce(assessment, bundle), bundle
 
 

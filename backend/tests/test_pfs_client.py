@@ -22,7 +22,7 @@ _SAMPLE_CSV = (
 
 
 def test_parses_active_cpt_code_with_rate_and_no_description():
-    entries = pfs_client.parse_pprrvu_csv(_SAMPLE_CSV.encode())
+    entries, _ = pfs_client.parse_pprrvu_csv(_SAMPLE_CSV.encode())
     entry = entries["76705"]
     assert entry.code_format == CodeFormat.CPT_CATEGORY_I
     assert entry.active is True
@@ -31,7 +31,7 @@ def test_parses_active_cpt_code_with_rate_and_no_description():
 
 
 def test_parses_hcpcs_level_ii_with_description_shown():
-    entries = pfs_client.parse_pprrvu_csv(_SAMPLE_CSV.encode())
+    entries, _ = pfs_client.parse_pprrvu_csv(_SAMPLE_CSV.encode())
     entry = entries["A4238"]
     assert entry.code_format == CodeFormat.HCPCS_LEVEL_II
     assert entry.active is False  # status X: statutorily excluded from PFS
@@ -40,7 +40,7 @@ def test_parses_hcpcs_level_ii_with_description_shown():
 
 
 def test_inactive_status_code_has_no_rate():
-    entries = pfs_client.parse_pprrvu_csv(_SAMPLE_CSV.encode())
+    entries, _ = pfs_client.parse_pprrvu_csv(_SAMPLE_CSV.encode())
     entry = entries["00100"]
     assert entry.active is False
     assert entry.rate_usd is None
@@ -49,7 +49,7 @@ def test_inactive_status_code_has_no_rate():
 def test_prefers_unmodified_row_when_both_exist():
     # 77777 appears twice: once with modifier "26", once blank -- the blank
     # (global, unmodified) row should win regardless of file order.
-    entries = pfs_client.parse_pprrvu_csv(_SAMPLE_CSV.encode())
+    entries, _ = pfs_client.parse_pprrvu_csv(_SAMPLE_CSV.encode())
     entry = entries["77777"]
     assert entry.rate_usd == round(0.52 * 33.4009, 2)
 
@@ -58,6 +58,16 @@ def test_unrecognized_layout_raises():
     import pytest
     with pytest.raises(ValueError):
         pfs_client.parse_pprrvu_csv(b"not,a,real,file\n1,2,3,4\n")
+
+
+def test_raw_description_index_includes_ama_licensed_codes_internally():
+    # The public FeeScheduleEntry.description is None for CPT formats, but
+    # the SEPARATE internal raw_descriptions index (for
+    # description_search.py's pre-filter only) must still have it --
+    # otherwise the pre-filter could never search CPT-format codes at all.
+    _, raw_descriptions = pfs_client.parse_pprrvu_csv(_SAMPLE_CSV.encode())
+    assert raw_descriptions["76705"] == "Echo exam of abdomen"
+    assert raw_descriptions["A4238"] == "Adju cgm supply allowance"
 
 
 @respx.mock

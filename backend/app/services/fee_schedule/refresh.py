@@ -27,14 +27,18 @@ async def refresh_pfs(client: httpx.AsyncClient) -> bool:
     never raises, since a failed refresh should leave the last-known-good
     data in place rather than wipe it."""
     try:
-        entries = await pfs_client.download_and_parse(client)
+        result = await pfs_client.download_and_parse(client)
     except Exception as exc:  # noqa: BLE001 - a scrape/parse failure here must never take down quick_scan
         logger.warning("PFS fee-schedule refresh failed, keeping previous data if any: %s", exc)
         return False
-    if not entries:
+    if not result:
         logger.warning("PFS fee-schedule refresh found no entries, keeping previous data if any")
         return False
+    entries, raw_descriptions = result
     await cache.store_table("pfs", entries)
+    # Internal-only index (see cache.py) -- never exposed via lookup(), used
+    # only by description_search.py's candidate-code pre-filter.
+    await cache.store_description_index("pfs", raw_descriptions)
     logger.info("PFS fee-schedule refreshed: %d codes", len(entries))
     return True
 

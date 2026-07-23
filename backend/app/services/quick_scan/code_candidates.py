@@ -5,6 +5,26 @@ a device to its code, so this flips the direction: propose candidates, then
 verify every one against real, current PFS data before trusting any of them
 -- mirrors the same verify-before-trust pattern already proven for openFDA
 identity matching (a wrong/unverified match is worse than an honest miss).
+
+Candidates come from three sources, all subject to the SAME verification
+step below -- none of them is trusted on its own:
+1. Code-shaped tokens found in already-fetched CMS coverage documents
+   (extract_code_mentions/_sourced_hints_from_bundle) -- highest-confidence,
+   since they come from a real coverage document, not a guess.
+2. propose_llm_candidates -- an LLM guessing from its own memorized
+   knowledge of how similar device categories are typically billed.
+3. Real-data pre-filter + LLM refinement (description_search.py +
+   refine_candidates_from_descriptions) -- added after finding that (2)
+   alone is unreliable for specific/newer codes: asked directly and
+   unambiguously, the model confidently gave a WRONG definition for a real,
+   current CPT code rather than admitting it didn't know. Since the code's
+   real, current description is sitting in the PFS registry, this
+   mechanically pre-filters that registry (loose, recall-oriented -- see
+   description_search.py's own docstring for why a single mechanical
+   threshold can't be both tight and complete against CMS's abbreviation
+   style) down to a small, real, grounded shortlist, then asks the LLM to
+   make the actual precision judgment against real candidates instead of
+   recalling one from memory -- recognition, not recall.
 """
 
 import re
@@ -12,7 +32,7 @@ import re
 from app.services.analysis.prompts_service import load_module_prompt
 from app.services.evidence_retrieval.orchestrator import EvidenceBundle
 from app.services.evidence_retrieval.types import RetrievalStatus, SourceEvidence
-from app.services.fee_schedule import cache
+from app.services.fee_schedule import cache, description_search
 from app.services.fee_schedule.code_format import CodeFormat, classify_code_format
 from app.services.fee_schedule.types import FeeScheduleEntry
 from app.services.llm.base import LLMProvider
@@ -61,6 +81,35 @@ async def propose_llm_candidates(llm: LLMProvider, model: str, stage1: Stage1Ext
     return CandidateCodesResponse.model_validate(result.content).candidate_codes
 
 
+async def refine_candidates_from_descriptions(
+    llm: LLMProvider, model: str, stage1: Stage1Extraction, candidates: dict[str, str],
+) -> list[str]:
+    """Shows the model REAL (code, real-current-description) pairs pulled
+    from the PFS registry and asks it to pick which, if any, match the
+    device's distinguishing characteristic -- recognition against grounded
+    data, not recall from memory. The raw descriptions are used here ONLY as
+    input to this internal LLM call; its output schema is code numbers
+    only (CandidateCodesResponse), so the descriptor text structurally
+    cannot be carried forward into anything Stage 3 or the UI ever sees."""
+    if not candidates:
+        return []
+    module_prompt = load_module_prompt("quick_scan_code_refinement")
+    candidates_text = "\n".join(f"{code}: {desc}" for code, desc in candidates.items())
+    user_message = wrap_untrusted_data(
+        f"technology_type: {stage1.technology_type}\nintended_use: {stage1.intended_use}\n\n"
+        f"Candidate codes:\n{candidates_text}"
+    )
+    schema = CandidateCodesResponse.model_json_schema()
+    result = await llm.structured_completion(
+        system_prompt=module_prompt, messages=[{"role": "user", "content": user_message}],
+        schema=schema, schema_name="quick_scan_code_refinement", model=model,
+        temperature=0, max_tokens=_MAX_OUTPUT_TOKENS,
+    )
+    picked = CandidateCodesResponse.model_validate(result.content).candidate_codes
+    # Never trust the model to only echo codes it was actually shown.
+    return [code for code in picked if code in candidates]
+
+
 async def verify_candidates(candidates: list[str], table: str = "pfs") -> list[FeeScheduleEntry]:
     verified = []
     seen = set()
@@ -85,12 +134,27 @@ def _entry_to_evidence_dict(entry: FeeScheduleEntry) -> dict:
     }
 
 
+async def _description_matched_candidates(
+    llm: LLMProvider, model: str, stage1: Stage1Extraction, table: str,
+) -> list[str]:
+    description_index = await cache.get_description_index(table)
+    if not description_index:
+        return []
+    query = f"{stage1.technology_type} {stage1.intended_use}"
+    prefiltered_codes = description_search.find_candidates(query, description_index)
+    if not prefiltered_codes:
+        return []
+    prefiltered = {code: description_index[code] for code in prefiltered_codes}
+    return await refine_candidates_from_descriptions(llm, model, stage1, prefiltered)
+
+
 async def resolve_fee_schedule_evidence(
     llm: LLMProvider, model: str, stage1: Stage1Extraction, bundle: EvidenceBundle, table: str = "pfs",
 ) -> SourceEvidence:
     sourced_hints = _sourced_hints_from_bundle(bundle)
     llm_candidates = await propose_llm_candidates(llm, model, stage1, sourced_hints)
-    verified = await verify_candidates(sourced_hints + llm_candidates, table=table)
+    description_matches = await _description_matched_candidates(llm, model, stage1, table)
+    verified = await verify_candidates(sourced_hints + llm_candidates + description_matches, table=table)
 
     if not verified:
         return SourceEvidence(source="fee_schedule_lookup", status=RetrievalStatus.MISS, latency_ms=0)

@@ -20,6 +20,7 @@ from app.services.quick_scan.schemas import Stage1Extraction
 
 _MAX_OUTPUT_TOKENS = 2000
 _MAX_EVIDENCE_BLOCK_CHARS = 1500 * 4  # ~1,500 tokens at ~4 chars/token, per source
+_MAX_UPLOADED_DOCUMENT_CHARS = 8000 * 4  # matches Stage 1's own truncation budget
 
 
 class QuickScanSynthesisError(Exception):
@@ -45,10 +46,23 @@ def _evidence_block(evidence: SourceEvidence) -> str:
     return f'<evidence source="{evidence.source}" status="{evidence.status.value}">\n{payload}\n</evidence>'
 
 
-def build_user_message(stage1: Stage1Extraction, bundle: EvidenceBundle) -> str:
+def _uploaded_document_block(source_text: str) -> str:
+    truncated = source_text[:_MAX_UPLOADED_DOCUMENT_CHARS]
+    return f"<uploaded_document>\n{truncated}\n</uploaded_document>"
+
+
+def build_user_message(stage1: Stage1Extraction, bundle: EvidenceBundle, source_text: str | None = None) -> str:
     stage1_json = stage1.model_dump_json()
     evidence_blocks = "\n".join(_evidence_block(e) for _, e in sorted(bundle.sources.items()))
-    combined = f"Stage 1 extraction:\n{stage1_json}\n\nEvidence bundle:\n{evidence_blocks}"
+    parts = [f"Stage 1 extraction:\n{stage1_json}", f"Evidence bundle:\n{evidence_blocks}"]
+    # A distinct block from the evidence bundle above -- <uploaded_document>
+    # is neither a HIT, MISS, nor RETRIEVAL_FAILURE (it's unverified,
+    # user-supplied content, not a government source), so it must never be
+    # conflated with those. See system_prompt_v2.md's own instruction on how
+    # this may and may not be used.
+    if source_text and source_text.strip():
+        parts.append(f"Uploaded document (a clue for identity, but see the pillar-specific evidence rule for it):\n{_uploaded_document_block(source_text)}")
+    combined = "\n\n".join(parts)
     return wrap_untrusted_data(combined)
 
 
@@ -58,9 +72,10 @@ async def run_stage3(
     stage1: Stage1Extraction,
     bundle: EvidenceBundle,
     on_usage: UsageCallback | None = None,
+    source_text: str | None = None,
 ) -> QuickScanAssessment:
     system_prompt = _read_system_prompt_v2()
-    user_message = build_user_message(stage1, bundle)
+    user_message = build_user_message(stage1, bundle, source_text)
     schema = QuickScanAssessment.model_json_schema()
 
     try:

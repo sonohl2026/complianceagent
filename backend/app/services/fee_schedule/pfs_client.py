@@ -26,6 +26,15 @@ file exists too -- GPCI{YYYY}.csv, in the same zip -- and is a reasonable
 follow-up if locality-specific rates matter later). Good enough for an
 informational "does this code exist and roughly what does it pay" pillar
 finding, not a billing-accurate rate.
+
+Also returns a SEPARATE raw-description index (code -> the file's own short
+description, for every code regardless of CPT/HCPCS format) alongside the
+normal entries. This is for app/services/fee_schedule/description_search.py
+and app/services/quick_scan/code_candidates.py's internal candidate-code
+search ONLY -- never merged into FeeScheduleEntry.description (which stays
+None for CPT-format codes, per the AMA-license rule enforced in
+code_format.py). Caller is responsible for keeping this index out of
+anything that reaches Stage 3's evidence bundle or the UI.
 """
 
 import csv
@@ -76,7 +85,7 @@ def _find_nonqpp_csv_name(names: list[str]) -> str | None:
     return candidates[0] if candidates else None
 
 
-def parse_pprrvu_csv(content: bytes) -> dict[str, FeeScheduleEntry]:
+def parse_pprrvu_csv(content: bytes) -> tuple[dict[str, FeeScheduleEntry], dict[str, str]]:
     text = content.decode("utf-8", errors="replace")
     reader = csv.reader(io.StringIO(text))
     rows = list(reader)
@@ -86,6 +95,7 @@ def parse_pprrvu_csv(content: bytes) -> dict[str, FeeScheduleEntry]:
         raise ValueError("PPRRVU file layout not recognized -- no row starting with 'HCPCS' found")
 
     entries: dict[str, FeeScheduleEntry] = {}
+    raw_descriptions: dict[str, str] = {}
     for row in rows[header_index + 1:]:
         if len(row) < 26 or not row[0].strip():
             continue
@@ -106,15 +116,18 @@ def parse_pprrvu_csv(content: bytes) -> dict[str, FeeScheduleEntry]:
         except (ValueError, IndexError):
             pass
 
-        description = None if is_ama_licensed_format(code_format) else (row[2].strip() or None)
+        raw_description = row[2].strip()
+        if raw_description:
+            raw_descriptions[code] = raw_description
+        description = None if is_ama_licensed_format(code_format) else (raw_description or None)
         entries[code] = FeeScheduleEntry(
             code=code, code_format=code_format, active=active, source="pfs",
             payment_system="PFS", rate_usd=rate_usd, status_code=status or None, description=description,
         )
-    return entries
+    return entries, raw_descriptions
 
 
-async def download_and_parse(client: httpx.AsyncClient) -> dict[str, FeeScheduleEntry] | None:
+async def download_and_parse(client: httpx.AsyncClient) -> tuple[dict[str, FeeScheduleEntry], dict[str, str]] | None:
     zip_url = await find_current_release_zip_url(client)
     if zip_url is None:
         return None

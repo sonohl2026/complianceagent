@@ -36,6 +36,12 @@ from app.services.fee_schedule.types import CodeFormat, FeeScheduleEntry
 
 _DATA_KEY_TEMPLATE = "fee_schedule:{table}:data"
 _REFRESHED_AT_KEY_TEMPLATE = "fee_schedule:{table}:refreshed_at"
+# INTERNAL ONLY -- raw, un-suppressed code descriptions (including
+# AMA-licensed CPT text) for description_search.py's candidate-code
+# pre-filter. Never read by lookup()/store_table() above, and never merged
+# into a FeeScheduleEntry -- callers of get_description_index() must keep
+# this out of anything that reaches Stage 3's evidence bundle or the UI.
+_DESCRIPTION_INDEX_KEY_TEMPLATE = "fee_schedule:{table}:description_index_internal"
 _TEST_DB_INDEX = "1"
 
 
@@ -99,3 +105,20 @@ async def last_refreshed_at(table: str) -> float | None:
     finally:
         await client.aclose()
     return float(value) if value is not None else None
+
+
+async def store_description_index(table: str, descriptions: dict[str, str]) -> None:
+    client = _client()
+    try:
+        await client.set(_DESCRIPTION_INDEX_KEY_TEMPLATE.format(table=table), json.dumps(descriptions))
+    finally:
+        await client.aclose()
+
+
+async def get_description_index(table: str) -> dict[str, str]:
+    client = _client()
+    try:
+        blob = await client.get(_DESCRIPTION_INDEX_KEY_TEMPLATE.format(table=table))
+    finally:
+        await client.aclose()
+    return json.loads(blob) if blob is not None else {}

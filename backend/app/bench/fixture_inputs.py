@@ -16,9 +16,24 @@ FIXTURE_SOURCE_TEXT = {
     2: """The Azure XT pacemaker from Medtronic is a dual-chamber pacing system
     indicated for bradycardia. It features BlueSync technology for wireless
     connectivity with patient monitors and is MRI conditional.""",
+    # Genuinely academic_paper_excerpt-shaped (matching benchmark_suite.json's
+    # own input_type for this fixture) rather than a bare device description
+    # -- needed to actually exercise Stage 3's uploaded-document evidence
+    # pillar path (added after finding the pipeline previously discarded the
+    # uploaded document entirely after Stage 1 identity extraction; see
+    # conversation record). Representative of the real IDx-DR pivotal trial
+    # (Abramoff et al., npj Digital Medicine 2018), not a verbatim quote.
     3: """IDx-DR (marketed as LumineticsCore) is an autonomous AI system that analyzes
     retinal images to detect more than mild diabetic retinopathy without requiring a
-    clinician to interpret the image. Intended for primary care settings.""",
+    clinician to interpret the image. Intended for primary care settings.
+
+    Pivotal trial results (prospective, multicenter clinical validation study, published
+    in npj Digital Medicine, 2018): 819 adult patients with diabetes and no history of
+    diabetic retinopathy were enrolled across 10 primary care sites. The device
+    demonstrated a sensitivity of 87.2% and specificity of 90.7% for detecting
+    more-than-mild diabetic retinopathy, exceeding the pre-specified endpoints. Imageability
+    was 96.1%. These results supported the device's autonomous, point-of-care diagnostic
+    claim without requiring a remote human grader.""",
     4: """The Dexcom G7 Continuous Glucose Monitoring System is a small wearable sensor
     worn on the back of the upper arm or abdomen that measures glucose levels every 5
     minutes for up to 10 days and sends readings to a compatible smart device.""",
