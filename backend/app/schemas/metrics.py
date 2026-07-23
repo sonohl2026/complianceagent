@@ -10,3 +10,7 @@ class QuickScanMetrics(BaseModel):
     cost_mean_usd: float | None
     not_scored_rate: float | None
     stage_token_totals: dict[str, dict[str, int]]
+    # Reflects CURRENT Settings config, not the sampled historical runs --
+    # see app/services/quick_scan/model_tier.py. False means Stage 1 and
+    # Stage 3 are (or were, at query time) silently sharing one model.
+    tier_split_active: bool

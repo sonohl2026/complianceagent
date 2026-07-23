@@ -11,6 +11,8 @@ from app.models.analysis import AnalysisRun
 from app.models.enums import JobStatus
 from app.schemas.metrics import QuickScanMetrics
 from app.services.quick_scan.metrics import RunSample, aggregate
+from app.services.quick_scan.model_tier import is_tier_split_active
+from app.services.storage.settings_store import load_runtime_settings
 
 router = APIRouter()
 
@@ -46,4 +48,4 @@ async def get_quick_scan_metrics(db: AsyncSession = Depends(get_db)) -> QuickSca
         for run in rows
     ]
 
-    return QuickScanMetrics(**aggregate(samples))
+    return QuickScanMetrics(**aggregate(samples), tier_split_active=is_tier_split_active(load_runtime_settings()))

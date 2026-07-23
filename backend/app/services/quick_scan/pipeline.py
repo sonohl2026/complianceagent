@@ -13,6 +13,7 @@ from app.services.evidence_retrieval.orchestrator import EvidenceBundle, run_evi
 from app.services.evidence_retrieval.types import SourceEvidence
 from app.services.llm.base import LLMProvider, LLMResult
 from app.services.quick_scan.code_candidates import resolve_fee_schedule_evidence
+from app.services.quick_scan.model_tier import warn_if_tier_split_inactive
 from app.services.quick_scan.schemas import Stage1Extraction
 from app.services.quick_scan.scoring_enforcement import enforce
 from app.services.quick_scan.stage1_extraction import UsageCallback, run_stage1
@@ -64,6 +65,14 @@ def _make_usage_recorder(db: AsyncSession, analysis_run: AnalysisRun):
         analysis_run.token_usage_json = {
             **analysis_run.token_usage_json,
             stage_name: {
+                # Which model actually served this stage -- previously not
+                # recorded anywhere, meaning there was no way to confirm from
+                # the data itself whether the tier split (model_tier.py) was
+                # really in effect for a given run, only from Settings state
+                # at query time. model_response_identifier is what the
+                # provider actually returned/routed to; requested_model is
+                # what was asked for -- prefer the former, it's more precise.
+                "model": result.model_response_identifier or result.requested_model,
                 "prompt_tokens": result.prompt_tokens,
                 "completion_tokens": result.completion_tokens,
                 "total_tokens": result.total_tokens,
@@ -80,6 +89,7 @@ def _make_usage_recorder(db: AsyncSession, analysis_run: AnalysisRun):
 
 async def run_quick_scan(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMProvider, model: str, source_text: str) -> None:
     settings = load_runtime_settings()
+    warn_if_tier_split_inactive(settings, context="quick_scan run")
     extraction_model = settings.get("openrouter_extraction_model") or model
     synthesis_model = settings.get("openrouter_synthesis_model") or model
 
@@ -135,6 +145,7 @@ async def run_quick_scan_override(db: AsyncSession, analysis_run: AnalysisRun, l
     user's override IS the corrected identity; it's applied directly to the
     previously-extracted Stage1Extraction instead."""
     settings = load_runtime_settings()
+    warn_if_tier_split_inactive(settings, context="quick_scan override run")
     synthesis_model = settings.get("openrouter_synthesis_model") or model
     extraction_model = settings.get("openrouter_extraction_model") or model
 
