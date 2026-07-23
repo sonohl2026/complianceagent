@@ -7,11 +7,16 @@ from app.services.evidence_retrieval.types import RetrievalStatus
 
 
 class _FakeStage1:
-    def __init__(self, product_name="Dexcom G7", manufacturer="Dexcom", aliases=None, candidate_search_terms=None):
+    def __init__(
+        self, product_name="Dexcom G7", manufacturer="Dexcom", aliases=None, candidate_search_terms=None,
+        intended_use="", technology_type="",
+    ):
         self.product_name = product_name
         self.manufacturer = manufacturer
         self.aliases = aliases or []
         self.candidate_search_terms = candidate_search_terms or ["continuous glucose monitor"]
+        self.intended_use = intended_use
+        self.technology_type = technology_type
 
 
 def setup_function():

@@ -112,11 +112,60 @@ async def _fetch_listing(client: httpx.AsyncClient, resource: str) -> SourceEvid
     )
 
 
-async def search_unlicensed(client: httpx.AsyncClient, resource: str, candidate_terms: list[str]) -> SourceEvidence:
+# Qualifier pairs the title match doesn't weight against the head noun it
+# modifies -- e.g. "continuous glucose monitor" is a substring of both
+# "Continuous Glucose Monitors" AND "Implantable Continuous Glucose
+# Monitors", so a device known (from Stage 1's own intended_use/
+# technology_type text) to be non-implantable/wearable can still match an
+# implantable-only policy. Real incident: fixture 4 (Dexcom G7, external/
+# wearable) matched an LCD titled "Implantable Continuous Glucose Monitors"
+# this way -- see status report and run_benchmark.py's module docstring.
+# Each pair is checked in both directions.
+_QUALIFIER_PAIRS = [
+    ("implantable", "non-implantable"),
+    ("implantable", "wearable"),
+    ("implantable", "external"),
+    ("pediatric", "adult"),
+    ("unilateral", "bilateral"),
+    ("internal", "external"),
+    ("left", "right"),
+    ("initial", "subsequent"),
+]
+
+
+def _qualifier_contradicts(title: str, device_context: str) -> bool:
+    """True if the title asserts one qualifier and the device's own
+    description asserts its pair's opposite -- e.g. title says "implantable",
+    device text says "wearable"/"external". Deliberately skips a pair if the
+    device text mentions BOTH sides (ambiguous, not a clean contradiction)
+    rather than guessing which one actually applies."""
+    if not device_context:
+        return False
+    title_l, device_l = title.lower(), device_context.lower()
+    for a, b in _QUALIFIER_PAIRS:
+        a_in_device, b_in_device = a in device_l, b in device_l
+        if a_in_device and b_in_device:
+            continue
+        if a in title_l and b_in_device:
+            return True
+        if b in title_l and a_in_device:
+            return True
+    return False
+
+
+async def search_unlicensed(
+    client: httpx.AsyncClient, resource: str, candidate_terms: list[str], device_context: str = "",
+) -> SourceEvidence:
     """Client-side keyword match against a resource's full title listing
     (spec: "search with procedure/condition keywords... MCD indexes services,
     not products" -- candidate_terms should be Stage-1's condition/procedure
-    terms, not the brand name). Always callable, no license required."""
+    terms, not the brand name). Always callable, no license required.
+
+    device_context (Stage 1's intended_use + technology_type + product_name,
+    free text -- see orchestrator.py's call site) is used ONLY to reject a
+    title match whose qualifier contradicts the device's own description; it
+    is never itself used as a search term, so this can't introduce new false
+    HITs, only remove specific false ones."""
     listing_evidence = await _fetch_listing(client, resource)
     if listing_evidence.status != RetrievalStatus.HIT:
         return SourceEvidence(source=f"cms_{resource}", status=listing_evidence.status,
@@ -127,9 +176,24 @@ async def search_unlicensed(client: httpx.AsyncClient, resource: str, candidate_
     matches = [row for row in rows if any(t in row.get("title", "").lower() for t in terms_lower)]
     if not matches:
         return SourceEvidence(source=f"cms_{resource}", status=RetrievalStatus.MISS, latency_ms=listing_evidence.latency_ms)
+
+    kept = [m for m in matches if not _qualifier_contradicts(m.get("title", ""), device_context)]
+    excluded = [m for m in matches if m not in kept]
+    if not kept:
+        return SourceEvidence(
+            source=f"cms_{resource}", status=RetrievalStatus.MISS, latency_ms=listing_evidence.latency_ms,
+            data={
+                "reason": "qualifier_contradiction",
+                "note": (
+                    f"{len(excluded)} title match(es) excluded: title qualifier contradicts the device's own "
+                    "description (e.g. implantable vs non-implantable) -- not cited as evidence."
+                ),
+                "excluded_titles": [m.get("title") for m in excluded],
+            },
+        )
     return SourceEvidence(
         source=f"cms_{resource}", status=RetrievalStatus.HIT,
-        latency_ms=listing_evidence.latency_ms, data={"matches": matches[:10]},
+        latency_ms=listing_evidence.latency_ms, data={"matches": kept[:10]},
     )
 
 

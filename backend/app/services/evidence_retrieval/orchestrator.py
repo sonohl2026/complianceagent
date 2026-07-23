@@ -29,6 +29,8 @@ class Stage1Like(Protocol):
     manufacturer: str
     aliases: list[str]
     candidate_search_terms: list[str]
+    intended_use: str
+    technology_type: str
 
 
 ProgressCallback = Callable[[str, SourceEvidence], Awaitable[None]]
@@ -135,9 +137,16 @@ async def _run_cms(
     # concurrently with the other resources' (CMS's own docs put its
     # throttle at 10,000 req/s, so no semaphore needed here unlike openFDA).
 
+    # Free text for the qualifier-contradiction guard (cms_coverage_client.py)
+    # -- never used as a search term itself, only to reject a title match
+    # whose qualifier contradicts what the device actually is.
+    device_context = f"{stage1.product_name} {stage1.technology_type} {stage1.intended_use}"
+
     async def _one(resource: str) -> dict[str, SourceEvidence]:
         result: dict[str, SourceEvidence] = {}
-        evidence = await cms_coverage_client.search_unlicensed(client, resource, stage1.candidate_search_terms)
+        evidence = await cms_coverage_client.search_unlicensed(
+            client, resource, stage1.candidate_search_terms, device_context=device_context,
+        )
         result[evidence.source] = evidence
         if on_progress is not None:
             await on_progress(evidence.source, evidence)
