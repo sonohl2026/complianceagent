@@ -58,16 +58,34 @@ class EvidenceBundle:
         return self.all_openfda_failed and self.all_cms_failed
 
 
-async def _run_openfda(client: httpx.AsyncClient, stage1: Stage1Like, on_progress: ProgressCallback | None) -> dict[str, SourceEvidence]:
-    results: dict[str, SourceEvidence] = {}
-    for name, search_fn in _OPENFDA_SEARCHES.items():
-        evidence = await search_fn(
-            client, product_name=stage1.product_name, manufacturer=stage1.manufacturer, aliases=stage1.aliases,
-        )
-        results[evidence.source] = evidence
+_OPENFDA_CONCURRENCY = 5  # small, defensive throttle -- openFDA's public rate
+# limit isn't officially pinned down for anonymous callers, and there's no
+# reason to risk it for one quick_scan's worth of 7 calls; this still runs
+# them almost entirely in parallel, just never more than 5 in flight at once.
+
+
+async def _run_openfda(
+    client: httpx.AsyncClient, stage1: Stage1Like, on_progress: ProgressCallback | None,
+) -> dict[str, SourceEvidence]:
+    # Previously a plain sequential for-loop despite the module docstring's
+    # own "parallel HTTP" claim -- see status report §2/§4. Each endpoint's
+    # OWN internal fallback order (exact name -> aliases -> manufacturer,
+    # stop at first verified hit -- openfda_client.py::search_with_fallback)
+    # is untouched; only the ACROSS-endpoint dispatch changes from sequential
+    # to concurrent.
+    semaphore = asyncio.Semaphore(_OPENFDA_CONCURRENCY)
+
+    async def _one(search_fn) -> tuple[str, SourceEvidence]:
+        async with semaphore:
+            evidence = await search_fn(
+                client, product_name=stage1.product_name, manufacturer=stage1.manufacturer, aliases=stage1.aliases,
+            )
         if on_progress is not None:
             await on_progress(evidence.source, evidence)
-    return results
+        return evidence.source, evidence
+
+    pairs = await asyncio.gather(*(_one(search_fn) for search_fn in _OPENFDA_SEARCHES.values()))
+    return dict(pairs)
 
 
 def _clean_text(value):
@@ -111,22 +129,57 @@ async def _run_cms(
     # settings["cms_license_accepted"], enforced by that function itself).
     # Only the top-ranked match gets a detail fetch, to keep this to at most
     # one extra HTTP call per resource rather than one per matched row.
-    results: dict[str, SourceEvidence] = {}
-    for resource in _CMS_RESOURCES:
+    #
+    # Previously a sequential for-loop across the 3 resources -- now each
+    # resource's own (listing -> conditional detail) sequence runs
+    # concurrently with the other resources' (CMS's own docs put its
+    # throttle at 10,000 req/s, so no semaphore needed here unlike openFDA).
+
+    async def _one(resource: str) -> dict[str, SourceEvidence]:
+        result: dict[str, SourceEvidence] = {}
         evidence = await cms_coverage_client.search_unlicensed(client, resource, stage1.candidate_search_terms)
-        results[evidence.source] = evidence
+        result[evidence.source] = evidence
         if on_progress is not None:
             await on_progress(evidence.source, evidence)
 
         if evidence.status != RetrievalStatus.HIT:
-            continue
+            return result
         detail = await _fetch_top_match_detail(client, resource, evidence, settings)
         if detail is None:
-            continue
-        results[detail.source] = detail
+            return result
+        result[detail.source] = detail
         if on_progress is not None:
             await on_progress(detail.source, detail)
-    return results
+        return result
+
+    per_resource = await asyncio.gather(*(_one(resource) for resource in _CMS_RESOURCES))
+    merged: dict[str, SourceEvidence] = {}
+    for result in per_resource:
+        merged.update(result)
+    return merged
+
+
+def _serialize_progress(on_progress: ProgressCallback | None) -> ProgressCallback | None:
+    """Now that up to 10 sources (7 openFDA + 3 CMS) can resolve genuinely
+    concurrently -- previously just 2 coarse groups -- a caller-supplied
+    on_progress that isn't itself concurrency-safe (pipeline.py's closure
+    calls db.commit() on one shared AsyncSession, which is NOT safe to touch
+    from multiple coroutines at once) would race. Hit this for real during
+    verification: a concurrent commit corrupted the session badly enough
+    that even the task's own failure-handling commit couldn't run, silently
+    orphaning the run in RUNNING forever. A single lock here serializes the
+    actual callback invocations without serializing the HTTP calls
+    themselves -- the slow part stays parallel, only the fast DB write
+    is queued."""
+    if on_progress is None:
+        return None
+    lock = asyncio.Lock()
+
+    async def _wrapped(source_name: str, evidence: SourceEvidence) -> None:
+        async with lock:
+            await on_progress(source_name, evidence)
+
+    return _wrapped
 
 
 async def run_evidence_retrieval(
@@ -138,6 +191,7 @@ async def run_evidence_retrieval(
     # convention rather than depending on file-backed state.
     if settings is None:
         settings = load_runtime_settings()
+    on_progress = _serialize_progress(on_progress)
     async with httpx.AsyncClient() as client:
         openfda_results, cms_results = await _gather_both(client, stage1, on_progress, settings)
 
