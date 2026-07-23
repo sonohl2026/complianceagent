@@ -7,6 +7,56 @@ literal text, so the harness needs an actual document to feed Stage 1 --
 these are hand-written excerpts matching each fixture's input_hint/name
 closely enough to exercise the real retrieval layer against the real device
 the fixture names.
+
+PROVISIONAL, PENDING OWNER REVIEW: the project's stated handoff included
+FIXTURE_INPUTS.md (the intended literal source documents for all 10
+fixtures) and fixture9_onepager.md (fixture 9's startup one-pager
+specifically) -- as of this writing, NEITHER file exists anywhere in this
+repo's git history, at any commit. What follows below is a best-effort
+substitute, not a recovery of those originals. Each entry's specific
+assumption about what the (never-seen) original said:
+
+  1. TAVR/SAPIEN 3: assumes a real-world-outcomes paper mentioning no FDA
+     numbers or CPT codes at all (per benchmark_suite.json's own input_hint)
+     -- text is invented, the clinical figures (45.1% 5yr mortality) are not
+     sourced from a real citable paper.
+  2. Azure XT pacemaker: assumes a plain manufacturer product-page style
+     description; no real clinical or regulatory figures asserted.
+  3. IDx-DR/LumineticsCore: assumes an academic-paper-excerpt shape per
+     benchmark_suite.json's own input_type. The pivotal-trial figures
+     (819 patients, 87.2%/90.7% sens/spec, npj Digital Medicine 2018) are
+     representative of the REAL published Abramoff et al. trial, not a
+     verbatim quote from it -- treat as directionally accurate, not citable.
+  4. Dexcom G7: assumes a plain product-description shape; the "wearable,
+     worn on the arm" framing is factually accurate (real product) but the
+     text itself is invented, not sourced from Dexcom's own materials.
+  5. Vscan Air: assumes a brochure_pdf-style product description per
+     benchmark_suite.json's own input_type; invented text, factually
+     accurate device description.
+  6. Breakthrough neurostimulation device: assumes a press-release style
+     announcement per benchmark_suite.json's input_type; the device itself
+     is intentionally generic ("pick current example at build time" per the
+     fixture's own name), so this is a representative composite, not any
+     specific real device.
+  7. PulseWave Analyzer: entirely invented device and text -- the fixture
+     name itself says "novel... device" with no real product implied.
+  8. MiniMed 600 series recall: assumes a news-article style report of a
+     real recall class/mechanism (retainer ring, over/under-delivery) that
+     is factually representative of real MiniMed recalls, not a verbatim
+     report.
+  9. Seed-stage acoustic sensing patch: THIS is the one fixture9_onepager.md
+     was specifically meant to supply. Assumes a pitch-deck-style one-pager
+     per benchmark_suite.json's input_type; both the company and device are
+     entirely invented, since the real one-pager's actual content is
+     unknown.
+  10. Retrieval outage: input content is irrelevant by design (the fixture
+      mocks a total API outage regardless of what's fed to Stage 1).
+
+The owner should review and either bless these as canonical stand-ins or
+replace them with the real originals; until then, treat any benchmark
+result that hinges on a specific factual claim in the text above (rather
+than the device's real, independently-retrieved regulatory/coding record)
+with proportionate skepticism.
 """
 
 FIXTURE_SOURCE_TEXT = {

@@ -40,54 +40,67 @@ Two things remain open, not attempted this pass:
   incidentally carry many HCPCS Level II codes with a "not payable under
   PFS" status, which is a real but partial signal, not equivalent to real
   DMEPOS rate data.
-- Genuine LLM output non-determinism at a decision boundary: Stage 3's
-  fda_status assessment for a device with exactly one confirmed, high-
-  confidence openFDA hit (e.g. fixture 5's Vscan Air -- a single exact
-  510(k) match, byte-for-byte identical across repeated retrieval runs) can
-  land as VERIFIED_POSITIVE or UNKNOWN on different real LLM calls with the
-  IDENTICAL evidence bundle. Since fda_status must be assessed for any
-  scoring to happen at all, this one borderline call can flip a whole
-  fixture between SCORED and NOT_SCORED run to run. Since documented:
-  scoring_enforcement.py's enforce_fda_status_from_verified_hit() now
-  code-side-promotes UNKNOWN/NA to VERIFIED_POSITIVE whenever an exact
-  regulatory-identity hit exists, closing the specific case this bullet
-  describes -- left here because the underlying Stage 3 non-determinism on
-  pillars *without* a code-side backstop is still real and unaddressed.
+- Genuine LLM output non-determinism, RE-CHARACTERIZED after restoring the
+  correct model tier split (see status report and its follow-up): the
+  original diagnosis on the (then-silently-substituted) extraction-tier
+  model found this isolated to fda_status specifically, with a code-side
+  fix (scoring_enforcement.py::enforce_fda_status_from_verified_hit) closing
+  that one case. Re-tested on the real strong-tier model (Sonnet) once the
+  tier split was restored: 6 calls against one frozen, byte-identical
+  evidence bundle (fixture 5's Vscan Air) flipped STATUS (not just score) on
+  THREE pillars without a code-side backstop -- coding, payment, and
+  evidence each swung between different assessed statuses (e.g. payment
+  MIXED <-> VERIFIED_POSITIVE, evidence UNKNOWN <-> MIXED) purely from
+  repeated calls at temperature=0 against identical input. This is Stage 3
+  itself sampling differently on truly fixed input, not upstream
+  evidence-shape variance as originally scoped -- broader and more serious
+  than the fda_status-only case that already has a fix. Not fixed. REVISIT
+  TRIGGER: any report of a maturity/pillar result changing between two runs
+  of the identical device with no retrieval or code change in between.
 
-TWO ADDITIONAL KNOWN ISSUES (found diagnosing fixture 4's real-run drop from
+ONE ADDITIONAL KNOWN ISSUE (found diagnosing fixture 4's real-run drop from
 80 to 72 after the uploaded-document-as-evidence fix; see conversation
 record for the full before/after pillar diagnosis):
 
-1. "Cost of uploading more text" hedging effect: restating a fact in the
-   <uploaded_document> block that Stage 3 already had via Stage 1's
-   intended_use JSON (confirmed identical in both conditions via a frozen-
-   evidence controlled experiment) measurably increased Stage 3's
-   conservatism on payment/coding/billing_workflow -- pillars the prompt
-   explicitly walls off from upload influence -- even though Stage 3 never
-   cited the upload as authority for those pillars. Not fixed; the more
-   cautious output was judged more honest here (see fixture 4's note in
-   benchmark_suite.json), not a bug to suppress. REVISIT TRIGGER: if users
-   report that richer/longer uploads score consistently worse than sparse
-   ones for reasons that don't trace to a real, articulable evidence gap,
-   this mechanic is the first place to look.
+- "Cost of uploading more text" hedging effect: restating a fact in the
+  <uploaded_document> block that Stage 3 already had via Stage 1's
+  intended_use JSON measurably increased Stage 3's conservatism on payment/
+  coding/billing_workflow on the (then-silently-substituted) extraction-tier
+  model -- a clean, zero-variance 9-point gap between "with upload" and
+  "without." RE-TESTED on the real strong-tier model (Sonnet): does NOT
+  reproduce as a distinct effect -- 6 samples per condition overlap
+  completely (76.8 vs 77.2 mean maturity). Not because the underlying
+  concern is resolved, but because it's swamped by the larger, general
+  non-determinism above: on Sonnet, pillar status already varies run-to-run
+  with NO upload-related change at all, so a subtler, upload-specific signal
+  can't be cleanly isolated the way it could against the more consistent
+  extraction-tier model's output. REVISIT TRIGGER: same as the
+  non-determinism item above -- if that gets a code-side fix and result
+  variance drops, re-run this specific before/after comparison to see if
+  the hedging effect re-emerges as a distinguishable signal once the noise
+  floor is lower.
 
-2. CMS coverage LCD substring mismatch: retrieval matched LCDs titled
-   "Implantable Continuous Glucose Monitors" against fixture 4's non-
-   implantable, wearable Dexcom G7, because the candidate/search-term match
-   only checks for a substring like "continuous glucose monitor" without
-   weighting the "implantable" qualifier that makes the policy inapplicable.
-   Same class of problem as the earlier Hologic mismatch -- distinguishing
-   terms in a title aren't weighted differently from the generic head noun
-   they modify. Not fixed. REVISIT TRIGGER: any future report of a coverage/
-   coding pillar citing a policy or code whose title contains a qualifier
-   (implantable/non-implantable, pediatric/adult, initial/subsequent, left/
-   right, unilateral/bilateral, etc.) that contradicts the actual device.
+(The CMS coverage LCD/Article/NCD qualifier mismatch previously listed here
+-- e.g. "Implantable Continuous Glucose Monitors" matching fixture 4's
+non-implantable Dexcom G7 -- is FIXED: see
+app/services/evidence_retrieval/cms_coverage_client.py's qualifier-
+contradiction guard.)
 
 `_classify` below distinguishes a genuine regression from a still-
 remaining, documented gap: KNOWN_GAP (thin real evidence or an explicitly
 annotated fixture-level known_gap, no technical failure) vs FAIL (anything
 else, including a RETRIEVAL_FAILURE-driven miss or an unannotated wrong
 SCORED band).
+
+BENCHMARK INTEGRITY FREEZE (effective 2026-07-23): no edit to any fixture's
+`expected` block in benchmark_suite.json without (a) a written rationale
+committed alongside the change (a `note` field on that fixture, matching
+the existing convention -- see benchmark_suite.json's own `changelog`
+section for the precedent) and (b) explicit owner sign-off before merge.
+The suite exists to check the pipeline against a fixed target; letting it
+drift to describe whatever the pipeline currently does, one individually
+reasonable edit at a time, would quietly defeat that purpose without any
+single change looking wrong in isolation.
 """
 
 import asyncio
