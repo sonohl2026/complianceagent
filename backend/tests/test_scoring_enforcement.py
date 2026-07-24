@@ -125,8 +125,15 @@ def _bundle_with_fee_schedule_hit(codes: list[str]) -> EvidenceBundle:
     )
 
 
-def test_unknown_coding_promoted_by_verified_fee_schedule_hit():
-    pillars = [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES]
+def _pillars_with_coding(coding_status: str, coding_score: int | None = None, fda_status: str = "VERIFIED_POSITIVE") -> list[Pillar]:
+    return [_pillar("fda_status", fda_status, 90 if fda_status == "VERIFIED_POSITIVE" else None)] + [
+        _pillar(n, "UNKNOWN", None) if n != "coding" else _pillar("coding", coding_status, coding_score)
+        for n in _PILLAR_NAMES if n != "fda_status"
+    ]
+
+
+def test_unknown_coding_promoted_by_verified_fee_schedule_hit_when_fda_status_verified():
+    pillars = _pillars_with_coding("UNKNOWN")
     bundle = _bundle_with_fee_schedule_hit(["92229"])
     result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
     coding = next(p for p in result if p.pillar == "coding")
@@ -135,15 +142,15 @@ def test_unknown_coding_promoted_by_verified_fee_schedule_hit():
     assert "92229" in coding.finding
 
 
-def test_na_coding_promoted_by_verified_fee_schedule_hit():
-    pillars = [_pillar("coding", "NA", None)] + [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES if n != "coding"]
+def test_na_coding_promoted_by_verified_fee_schedule_hit_when_fda_status_verified():
+    pillars = _pillars_with_coding("NA")
     bundle = _bundle_with_fee_schedule_hit(["76705"])
     result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
     assert next(p for p in result if p.pillar == "coding").status == "VERIFIED_POSITIVE"
 
 
 def test_unknown_coding_not_promoted_on_fee_schedule_miss():
-    pillars = [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES]
+    pillars = _pillars_with_coding("UNKNOWN")
     bundle = EvidenceBundle(
         sources={"fee_schedule_lookup": SourceEvidence(source="fee_schedule_lookup", status=RetrievalStatus.MISS, latency_ms=0)},
         all_openfda_failed=False, all_cms_failed=False,
@@ -153,7 +160,7 @@ def test_unknown_coding_not_promoted_on_fee_schedule_miss():
 
 
 def test_unknown_coding_not_promoted_with_no_fee_schedule_source_at_all():
-    pillars = [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES]
+    pillars = _pillars_with_coding("UNKNOWN")
     result = enforce_coding_from_verified_fee_schedule_hit(pillars, _no_failure_bundle())
     assert next(p for p in result if p.pillar == "coding").status == "UNKNOWN"
 
@@ -162,7 +169,7 @@ def test_unknown_coding_not_promoted_when_hit_has_no_verified_codes():
     # Defensive: a HIT with an empty verified_codes list shouldn't happen
     # given resolve_fee_schedule_evidence's own MISS-on-empty behavior, but
     # this rule doesn't assume that invariant holds forever.
-    pillars = [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES]
+    pillars = _pillars_with_coding("UNKNOWN")
     bundle = _bundle_with_fee_schedule_hit([])
     result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
     assert next(p for p in result if p.pillar == "coding").status == "UNKNOWN"
@@ -170,12 +177,67 @@ def test_unknown_coding_not_promoted_when_hit_has_no_verified_codes():
 
 def test_already_assessed_coding_never_second_guessed():
     for status in ("VERIFIED_POSITIVE", "VERIFIED_NEGATIVE", "MIXED"):
-        pillars = [_pillar("coding", status, 40)] + [_pillar(n, "UNKNOWN", None) for n in _PILLAR_NAMES if n != "coding"]
+        pillars = _pillars_with_coding(status, 40)
         bundle = _bundle_with_fee_schedule_hit(["92229"])
         result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
         coding = next(p for p in result if p.pillar == "coding")
         assert coding.status == status
         assert coding.score == 40  # untouched, not re-scored to 65
+
+
+# --- gate on verified fda_status (added after a real production failure
+# mode: fixture 9, an investigational pre-FDA-submission device, had coding
+# mechanically promoted from a loosely keyword-matched fee_schedule hit --
+# cardiac/remote-monitoring CPT codes matched its "acoustic sensing"
+# description on category similarity alone, not because the device has any
+# real billing determination. Verifying the CODE is necessary but not
+# sufficient; the DEVICE must also be a real, FDA-authorized product.) ---
+
+def test_unknown_coding_not_promoted_when_fda_status_unknown():
+    # Fixture 9's exact scenario: a genuine fee_schedule_lookup HIT exists,
+    # but the device has no verified FDA record -- must NOT promote.
+    pillars = _pillars_with_coding("UNKNOWN", fda_status="UNKNOWN")
+    bundle = _bundle_with_fee_schedule_hit(["93000", "99091"])
+    result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
+    assert next(p for p in result if p.pillar == "coding").status == "UNKNOWN"
+
+
+def test_unknown_coding_not_promoted_when_fda_status_mixed_or_negative():
+    for fda_status in ("MIXED", "VERIFIED_NEGATIVE", "NA", "RETRIEVAL_FAILURE"):
+        pillars = _pillars_with_coding("UNKNOWN", fda_status=fda_status)
+        bundle = _bundle_with_fee_schedule_hit(["92229"])
+        result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
+        assert next(p for p in result if p.pillar == "coding").status == "UNKNOWN", (
+            f"coding should stay UNKNOWN when fda_status is {fda_status}, not VERIFIED_POSITIVE"
+        )
+
+
+def test_unknown_coding_promoted_when_fda_status_was_itself_promoted_by_the_earlier_rule():
+    # enforce()'s real call order: enforce_fda_status_from_verified_hit runs
+    # first and may itself promote UNKNOWN -> VERIFIED_POSITIVE. This rule
+    # must see and trust that promotion, not just an already-VERIFIED_POSITIVE
+    # status Stage 3 wrote directly.
+    pillars = [
+        _pillar("fda_status", "UNKNOWN", None),
+        _pillar("coding", "UNKNOWN", None),
+        _pillar("coverage", "UNKNOWN", None),
+        _pillar("payment", "UNKNOWN", None),
+        _pillar("evidence", "UNKNOWN", None),
+        _pillar("billing_workflow", "UNKNOWN", None),
+    ]
+    bundle = EvidenceBundle(
+        sources={
+            "openfda_510k": SourceEvidence(source="openfda_510k", status=RetrievalStatus.HIT, latency_ms=0, match_confidence="exact"),
+            "fee_schedule_lookup": SourceEvidence(
+                source="fee_schedule_lookup", status=RetrievalStatus.HIT, latency_ms=0,
+                data={"verified_codes": [{"code": "92229"}]},
+            ),
+        },
+        all_openfda_failed=False, all_cms_failed=False,
+    )
+    pillars = enforce_fda_status_from_verified_hit(pillars, bundle)
+    result = enforce_coding_from_verified_fee_schedule_hit(pillars, bundle)
+    assert next(p for p in result if p.pillar == "coding").status == "VERIFIED_POSITIVE"
 
 
 def test_enforce_end_to_end_promotes_coding_and_rescues_scoring():

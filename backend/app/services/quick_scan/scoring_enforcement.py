@@ -78,9 +78,29 @@ def enforce_coding_from_verified_fee_schedule_hit(pillars: list[Pillar], evidenc
     promotes when verified_codes is actually non-empty (an evidence-present
     but code-empty HIT shouldn't happen given resolve_fee_schedule_evidence's
     own MISS-on-empty behavior, but this doesn't assume that invariant
-    holds forever)."""
+    holds forever).
+
+    GATED on fda_status already reading VERIFIED_POSITIVE in this same
+    pillars list (this rule runs after enforce_fda_status_from_verified_hit
+    in enforce()'s chain, so that reflects any promotion that rule already
+    applied). Added after a real failure mode surfaced in production
+    measurement: fixture 9 (an investigational, pre-FDA-submission device)
+    had coding mechanically promoted from a loosely keyword-matched
+    fee_schedule_lookup hit (cardiac/remote-monitoring CPT codes matched on
+    the device's own "acoustic sensing" description, not because the device
+    actually has any real billing determination), pushing a genuinely
+    early-stage device from correct NOT_SCORED to an incorrect SCORED=27. A
+    device with no verified FDA record cannot legitimately bill anything --
+    a keyword-matched code against it is noise, not evidence, no matter how
+    cleanly it verified against real PFS data. Verifying the CODE is
+    necessary but not sufficient; the DEVICE must also be a real,
+    authorized product before a code match means anything."""
     coding_pillar = next(p for p in pillars if p.pillar == "coding")
     if coding_pillar.status not in ("UNKNOWN", "NA"):
+        return pillars
+
+    fda_status_pillar = next(p for p in pillars if p.pillar == "fda_status")
+    if fda_status_pillar.status != "VERIFIED_POSITIVE":
         return pillars
 
     fee_schedule_evidence = evidence.sources.get("fee_schedule_lookup")
