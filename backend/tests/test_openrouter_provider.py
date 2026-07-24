@@ -74,6 +74,151 @@ async def test_prompt_caching_off_sends_plain_string():
     assert sent_body["messages"][0] == {"role": "system", "content": "a long, reused system prompt"}
 
 
+# --- truncate-not-retry + repair-path integrity guard (added after a real
+# incident: repair passes were silently rewriting whole pillars' findings,
+# not just the field that actually violated the schema -- see conversation
+# record. Root cause: the deployed repair prompt had silently dropped spec
+# §2's own "change no values" clause. Fixed two ways: (1) a maxLength
+# violation -- confirmed the dominant real-world case -- never needs an LLM
+# round-trip at all now; (2) any repair that IS attempted is diffed against
+# the first-pass content and rejected if it touches anything the validation
+# error didn't name. ---
+
+_ITEMS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "detail": {"type": "string", "maxLength": 20},
+                    "status": {"enum": ["OK", "BAD"]},
+                },
+                "required": ["name", "detail", "status"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["items"],
+    "additionalProperties": False,
+}
+
+
+@respx.mock
+async def test_maxlength_violation_fixed_by_truncation_no_llm_repair_call():
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_chat_response({
+            "items": [{"name": "a", "detail": "this description is way too long for the cap", "status": "OK"}],
+        }))
+    )
+    provider = _provider()
+    result = await provider.structured_completion(
+        system_prompt="sys", messages=[{"role": "user", "content": "go"}],
+        schema=_ITEMS_SCHEMA, schema_name="items_schema", model="anthropic/claude-sonnet-4.5",
+    )
+    assert route.call_count == 1  # no LLM repair round-trip at all
+    assert result.schema_repair_attempted is False
+    assert len(result.content["items"][0]["detail"]) <= 20
+    assert result.content["items"][0]["detail"].endswith("…")
+    assert result.content["items"][0]["name"] == "a"  # untouched field survives
+
+
+@respx.mock
+async def test_multiple_maxlength_violations_all_fixed_by_truncation():
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_chat_response({
+            "items": [
+                {"name": "a", "detail": "this first description is way too long for the cap", "status": "OK"},
+                {"name": "b", "detail": "this second description is also way too long for the cap", "status": "BAD"},
+            ],
+        }))
+    )
+    provider = _provider()
+    result = await provider.structured_completion(
+        system_prompt="sys", messages=[{"role": "user", "content": "go"}],
+        schema=_ITEMS_SCHEMA, schema_name="items_schema", model="anthropic/claude-sonnet-4.5",
+    )
+    assert route.call_count == 1
+    assert result.schema_repair_attempted is False
+    assert all(len(item["detail"]) <= 20 for item in result.content["items"])
+
+
+@respx.mock
+async def test_enum_violation_not_truncation_fixable_falls_through_to_repair():
+    respx.post(CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_chat_response({"items": [{"name": "a", "detail": "short", "status": "MAYBE"}]})),
+            httpx.Response(200, json=_chat_response({"items": [{"name": "a", "detail": "short", "status": "OK"}]})),
+        ]
+    )
+    provider = _provider()
+    result = await provider.structured_completion(
+        system_prompt="sys", messages=[{"role": "user", "content": "go"}],
+        schema=_ITEMS_SCHEMA, schema_name="items_schema", model="anthropic/claude-sonnet-4.5",
+    )
+    assert result.schema_repair_attempted is True
+    assert result.content["items"][0]["status"] == "OK"
+    assert result.repair_rejected is False
+
+
+@respx.mock
+async def test_compliant_repair_accepted_when_it_only_touches_the_violating_field():
+    respx.post(CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_chat_response({"items": [{"name": "a", "detail": "short", "status": "MAYBE"}]})),
+            httpx.Response(200, json=_chat_response({"items": [{"name": "a", "detail": "short", "status": "OK"}]})),
+        ]
+    )
+    provider = _provider()
+    result = await provider.structured_completion(
+        system_prompt="sys", messages=[{"role": "user", "content": "go"}],
+        schema=_ITEMS_SCHEMA, schema_name="items_schema", model="anthropic/claude-sonnet-4.5",
+    )
+    assert result.repair_rejected is False
+    assert result.content == {"items": [{"name": "a", "detail": "short", "status": "OK"}]}
+
+
+@respx.mock
+async def test_value_altering_repair_rejected_then_succeeds_on_retry():
+    # First repair fixes the enum violation but ALSO rewrites "detail"
+    # (unauthorized) -- must be rejected and retried; second repair fixes
+    # it properly.
+    route = respx.post(CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_chat_response({"items": [{"name": "a", "detail": "original text", "status": "MAYBE"}]})),
+            httpx.Response(200, json=_chat_response({"items": [{"name": "a", "detail": "REWRITTEN", "status": "OK"}]})),
+            httpx.Response(200, json=_chat_response({"items": [{"name": "a", "detail": "original text", "status": "OK"}]})),
+        ]
+    )
+    provider = _provider()
+    result = await provider.structured_completion(
+        system_prompt="sys", messages=[{"role": "user", "content": "go"}],
+        schema=_ITEMS_SCHEMA, schema_name="items_schema", model="anthropic/claude-sonnet-4.5",
+    )
+    assert route.call_count == 3  # first-pass + rejected repair + retry
+    assert result.repair_rejected is True
+    assert result.content == {"items": [{"name": "a", "detail": "original text", "status": "OK"}]}
+
+
+@respx.mock
+async def test_value_altering_repair_still_wrong_after_retry_raises_hard_error():
+    respx.post(CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_chat_response({"items": [{"name": "a", "detail": "original text", "status": "MAYBE"}]})),
+            httpx.Response(200, json=_chat_response({"items": [{"name": "a", "detail": "REWRITTEN ONCE", "status": "OK"}]})),
+            httpx.Response(200, json=_chat_response({"items": [{"name": "a", "detail": "REWRITTEN AGAIN", "status": "OK"}]})),
+        ]
+    )
+    provider = _provider()
+    with pytest.raises(LLMValidationError, match="refusing to return a silently rewritten assessment"):
+        await provider.structured_completion(
+            system_prompt="sys", messages=[{"role": "user", "content": "go"}],
+            schema=_ITEMS_SCHEMA, schema_name="items_schema", model="anthropic/claude-sonnet-4.5",
+        )
+
+
 @respx.mock
 async def test_structured_completion_returns_parsed_content():
     respx.post(CHAT_URL).mock(

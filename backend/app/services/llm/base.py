@@ -23,6 +23,14 @@ class LLMResult:
     latency_ms: int
     finish_reason: str | None
     schema_repair_attempted: bool = False
+    # True only if a repair pass was rejected by the value-integrity check
+    # (it altered a field the validation error didn't name) and had to be
+    # retried before a result was ultimately accepted or a hard error raised
+    # -- see openrouter_provider.py's repair-path integrity guard. Distinct
+    # from schema_repair_attempted: a repair can fire and be accepted clean
+    # (repair_rejected=False), or fire, get rejected once, and still recover
+    # on retry (repair_rejected=True but no exception raised).
+    repair_rejected: bool = False
     metadata: dict = field(default_factory=dict)
 
 

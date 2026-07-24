@@ -78,6 +78,13 @@ def _make_usage_recorder(db: AsyncSession, analysis_run: AnalysisRun):
                 "total_tokens": result.total_tokens,
                 "cached_tokens": result.metadata.get("cached_tokens"),
                 "cache_write_tokens": result.metadata.get("cache_write_tokens"),
+                # Previously not recorded anywhere -- a repair pass firing
+                # was invisible in every persisted record, which is exactly
+                # why a value-alteration incident could go unaudited (see
+                # the close-out report's blast-radius audit). Now first-
+                # class per-run/per-stage fields, surfaced in /metrics too.
+                "repair_fired": result.schema_repair_attempted,
+                "repair_rejected": result.repair_rejected,
             },
         }
         if result.cost_usd is not None:

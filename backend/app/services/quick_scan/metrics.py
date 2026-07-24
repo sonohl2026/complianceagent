@@ -28,9 +28,21 @@ class RunSample:
     token_usage: dict[str, dict[str, int]]
 
 
+def _any_stage_flag(token_usage: dict[str, dict], flag: str) -> bool:
+    return any(usage.get(flag) for usage in token_usage.values())
+
+
 def aggregate(samples: list[RunSample]) -> dict:
     wall_clock = [s.wall_clock_seconds for s in samples if s.wall_clock_seconds is not None]
     costs = [s.cost_usd for s in samples if s.cost_usd is not None]
+
+    # First-class per Step 4d of the close-out: a repair pass firing was
+    # previously invisible in every persisted record (see the blast-radius
+    # audit in the close-out report) -- these are the "going forward"
+    # monitored metrics so a regression here is visible in /metrics instead
+    # of resurfacing as a mystery p95 breach.
+    repair_fired_count = sum(1 for s in samples if _any_stage_flag(s.token_usage, "repair_fired"))
+    repair_rejected_count = sum(1 for s in samples if _any_stage_flag(s.token_usage, "repair_rejected"))
 
     # cached_tokens/cache_write_tokens are None whenever a stage's response
     # didn't report prompt-caching details at all (not every call gets a
@@ -54,5 +66,7 @@ def aggregate(samples: list[RunSample]) -> dict:
         "cost_p95_usd": percentile(costs, 95),
         "cost_mean_usd": (sum(costs) / len(costs)) if costs else None,
         "not_scored_rate": (sum(1 for s in samples if s.not_scored) / len(samples)) if samples else None,
+        "repair_fire_rate": (repair_fired_count / len(samples)) if samples else None,
+        "repair_rejected_count": repair_rejected_count,
         "stage_token_totals": stage_totals,
     }
