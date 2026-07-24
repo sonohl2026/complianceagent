@@ -163,13 +163,25 @@ class _CostAccumulator:
     fee-schedule candidate-proposal and refinement calls -- so the printed
     table can carry a real per-fixture $ figure. Spec §6: "Store per-run
     cost + latency next to results"; this harness previously only stored
-    latency."""
+    latency.
+
+    Also tracks repair_fired/repair_rejected per call (added for the close-
+    out's re-acceptance criteria: a repair-pass fire rate threshold and a
+    zero-rejection requirement) -- the bench harness bypasses DB persistence
+    entirely (see module docstring), so it's otherwise blind to these, the
+    same way it was blind to cost before this same fix's pattern."""
 
     def __init__(self) -> None:
         self.total_usd = 0.0
+        self.repair_fired = False
+        self.repair_rejected = False
 
     async def record(self, stage_name: str, result) -> None:  # noqa: ARG002 - matches UsageCallback shape
         self.total_usd += result.cost_usd or 0.0
+        if getattr(result, "schema_repair_attempted", False):
+            self.repair_fired = True
+        if getattr(result, "repair_rejected", False):
+            self.repair_rejected = True
 
 
 async def _run_pipeline_for_fixture(fixture_id: int, dry_run: bool, real_llm, model: str, synthesis_model: str):
@@ -184,7 +196,7 @@ async def _run_pipeline_for_fixture(fixture_id: int, dry_run: bool, real_llm, mo
     assessment = await run_stage3(
         llm, "dry-run" if dry_run else synthesis_model, stage1, bundle, on_usage=cost.record, source_text=source_text,
     )
-    return enforce(assessment, bundle), bundle, cost.total_usd
+    return enforce(assessment, bundle), bundle, cost.total_usd, cost.repair_fired, cost.repair_rejected
 
 
 async def _run_fixture_10(dry_run: bool, real_llm, model: str, synthesis_model: str):
@@ -223,7 +235,7 @@ async def _run_fixture_10(dry_run: bool, real_llm, model: str, synthesis_model: 
     assessment = await run_stage3(
         llm, "dry-run" if dry_run else synthesis_model, stage1, bundle, on_usage=cost.record, source_text=source_text,
     )
-    return enforce(assessment, bundle), bundle, cost.total_usd
+    return enforce(assessment, bundle), bundle, cost.total_usd, cost.repair_fired, cost.repair_rejected
 
 
 def _classify(result, bundle, failures: list[str], expected: dict | None = None) -> str:
@@ -324,11 +336,13 @@ async def main() -> int:
         started = time.monotonic()
         bundle = None
         cost_usd = None
+        repair_fired = False
+        repair_rejected = False
         try:
             if fixture_id == 10:
-                result, bundle, cost_usd = await _run_fixture_10(dry_run, real_llm, model, synthesis_model)
+                result, bundle, cost_usd, repair_fired, repair_rejected = await _run_fixture_10(dry_run, real_llm, model, synthesis_model)
             else:
-                result, bundle, cost_usd = await _run_pipeline_for_fixture(fixture_id, dry_run, real_llm, model, synthesis_model)
+                result, bundle, cost_usd, repair_fired, repair_rejected = await _run_pipeline_for_fixture(fixture_id, dry_run, real_llm, model, synthesis_model)
             elapsed = time.monotonic() - started
             failures = _check_expectations(result, fixture["expected"]) + _check_invariants(result, fixture)
         except Exception as exc:  # noqa: BLE001 - a fixture-level crash is itself a failure to report, not to propagate
@@ -344,17 +358,20 @@ async def main() -> int:
             "maturity": result.scores.maturity if result else None,
             "maturity_state": result.scores.maturity_state if result else "CRASHED",
             "cost_usd": round(cost_usd, 4) if cost_usd is not None else None,
+            "repair_fired": repair_fired,
+            "repair_rejected": repair_rejected,
         })
 
-    print(f"\n{'ID':<4}{'Name':<45}{'State':<12}{'Maturity':<10}{'Time':<8}{'Cost':<9}{'Result'}")
-    print("-" * 110)
+    print(f"\n{'ID':<4}{'Name':<45}{'State':<12}{'Maturity':<10}{'Time':<8}{'Cost':<9}{'Repair':<8}{'Result'}")
+    print("-" * 118)
     total_cost = 0.0
     for row in rows:
         cost_str = f"${row['cost_usd']:.4f}" if row["cost_usd"] is not None else "—"
         total_cost += row["cost_usd"] or 0.0
+        repair_str = ("REJECTED" if row["repair_rejected"] else "fired") if row["repair_fired"] else "—"
         print(
             f"{row['id']:<4}{row['name'][:43]:<45}{row['maturity_state']:<12}{str(row['maturity']):<10}"
-            f"{row['elapsed_s']:<8}{cost_str:<9}{row['status']}"
+            f"{row['elapsed_s']:<8}{cost_str:<9}{repair_str:<8}{row['status']}"
         )
         for failure in row["failures"]:
             print(f"      -> {failure}")
@@ -362,10 +379,14 @@ async def main() -> int:
     n_passed = sum(1 for r in rows if r["status"] == "PASS")
     n_known_gap = sum(1 for r in rows if r["status"] == "KNOWN_GAP")
     n_failed = sum(1 for r in rows if r["status"] == "FAIL")
+    n_repaired = sum(1 for r in rows if r["repair_fired"])
+    n_rejected = sum(1 for r in rows if r["repair_rejected"])
     print(
         f"\n{n_passed}/{len(rows)} fixtures passed outright, {n_known_gap} known-gap "
         f"(documented Stage-2 coding/coverage/payment data limitation, see module docstring), "
-        f"{n_failed} failed. Total cost: ${total_cost:.4f}. Mode: {'DRY_RUN_LLM' if dry_run else 'REAL (costed)'}"
+        f"{n_failed} failed. Total cost: ${total_cost:.4f}. Repair fired: {n_repaired}/{len(rows)} "
+        f"({100 * n_repaired / len(rows):.0f}%), rejected: {n_rejected}. "
+        f"Mode: {'DRY_RUN_LLM' if dry_run else 'REAL (costed)'}"
     )
     return 1 if any_failed else 0
 
