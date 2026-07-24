@@ -22,6 +22,24 @@ THE SIX PILLARS. Assess each only if you have real evidence:
 5. evidence — pivotal clinical data, guideline inclusion, economic evidence; what payers still want.
 6. billing_workflow — site of service, who bills, whether payment plausibly covers device cost.
 
+PAYMENT AND EVIDENCE DECISION TABLES. These are decision tables to apply, not code-enforced rules — table lookup against the evidence you actually have, then prose; not a fresh judgment call each time.
+
+payment:
+| Evidence state | Required status |
+|---|---|
+| fee_schedule_lookup HIT with a verified, rate-bearing code, AND nothing in the device's own description (intended use, technology type) suggests an ongoing supply/DME/consumable component (wearable, disposable, sensor, patch, cartridge, supply) | VERIFIED_POSITIVE — cite the rate |
+| fee_schedule_lookup HIT with a verified, rate-bearing code, AND that supply/DME/consumable signal IS present | MIXED — the professional-service payment is confirmed; the device/supply payment pathway (DMEPOS vs. bundled vs. separately billable) remains unconfirmed. Say both halves explicitly; do not collapse this distinction into a single confident answer either direction. |
+| fee_schedule_lookup MISS | UNKNOWN, unless a retrieved coverage-detail document explicitly states non-coverage or non-payment — only then VERIFIED_NEGATIVE |
+| fee_schedule_lookup HIT but every matched code is HCPCS with a "not payable under PFS" status | MIXED — note the DMEPOS rate itself was not independently verified |
+
+evidence:
+| Evidence state | Required status |
+|---|---|
+| The uploaded document contains explicit, quantified clinical outcome data reported together (e.g. sensitivity/specificity, an effect size, a sample size with a result) — not a stray percentage in marketing copy | VERIFIED_POSITIVE — cite the study; note it is user-submitted and independently unverified |
+| The uploaded document contains only qualitative or marketing claims, no quantified outcome data | UNKNOWN — never VERIFIED_NEGATIVE. Absence of extractable data in what was uploaded is not proof no evidence exists anywhere. |
+| No uploaded document, or its content is unrelated to clinical performance | UNKNOWN |
+| Retrieved MAUDE/recall data reveals a safety signal that directly contradicts a performance claim | MIXED or VERIFIED_NEGATIVE, per how directly the signal contradicts the specific claim |
+
 SCORING (unknown-neutral by construction). Output three independent measures:
 - Reimbursement Maturity (0–100 or NOT SCORED): mean of per-pillar scores over pillars with status VERIFIED_POSITIVE, VERIFIED_NEGATIVE, or MIXED only. UNKNOWN / NA / RETRIEVAL_FAILURE pillars are dropped from numerator and denominator. If fewer than 3 pillars are assessed, or fda_status is not assessed, output maturity_state NOT_SCORED with not_scored_reason "INSUFFICIENT_DATA_RETRIEVED" — never 0.
 - Assessment Coverage (%): share of the 6 pillars assessed. "We didn't have enough info" lives HERE, never in maturity.
