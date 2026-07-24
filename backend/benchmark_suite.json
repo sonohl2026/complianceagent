@@ -30,6 +30,12 @@
       "fixture_id": 5,
       "change": "maturity_band floor lowered from 65 to 60 (now [60,80]), AFTER the causal fix (input enrichment) was tried and measured first",
       "reason": "Enriching fixture 5's input with real clinical-validation content (commit 33f6a99) correctly fixed the evidence pillar (UNKNOWN 5/5 -> VERIFIED_POSITIVE 5/5) but did not raise maturity -- mean stayed at 61.2 (60-62) because fda_status flipped VERIFIED_POSITIVE 5/5 -> MIXED 4/5, the same upload-hedging mechanic documented on fixture 4 last cycle, now confirmed on a second fixture. The floor was widened to the measured post-fix range's actual floor (60), not chosen to make the number look better before trying the real fix."
+    },
+    {
+      "date": "2026-07-24",
+      "fixture_id": null,
+      "change": "fixture_inputs.py's ten stand-in texts adopted as canonical benchmark inputs",
+      "reason": "The stated project handoff included FIXTURE_INPUTS.md (literal source documents for all 10 fixtures) and fixture9_onepager.md (fixture 9 specifically) -- neither exists anywhere in this repo's git history, at any commit, and they are formally abandoned, not reconstructed. Before adopting the label, ran a per-fixture verification pass: (a) does the text match its own input_type/input_hint, (b) does it exercise the archetype the fixture exists to test, (c) is anything in it factually wrong about the real product it names, checked against retrieval evidence already gathered across this engagement's many real runs. All 10 fixtures passed all three checks as already written -- zero text changes were needed in this pass, because fixtures 3 and 5 had already been through a dedicated enrichment+re-verification cycle earlier in this engagement for the same reason. See fixture_inputs.py's own header for the full per-fixture record."
     }
   ],
   "description": "Regression fixtures for Reimbursement Readiness Agent v2.0. Run all fixtures through quick_scan on every prompt/pipeline change. Bands are inclusive. Invariants apply to every fixture.",

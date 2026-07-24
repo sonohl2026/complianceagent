@@ -8,13 +8,38 @@ these are hand-written excerpts matching each fixture's input_hint/name
 closely enough to exercise the real retrieval layer against the real device
 the fixture names.
 
-PROVISIONAL, PENDING OWNER REVIEW: the project's stated handoff included
-FIXTURE_INPUTS.md (the intended literal source documents for all 10
-fixtures) and fixture9_onepager.md (fixture 9's startup one-pager
-specifically) -- as of this writing, NEITHER file exists anywhere in this
-repo's git history, at any commit. What follows below is a best-effort
-substitute, not a recovery of those originals. Each entry's specific
-assumption about what the (never-seen) original said:
+CANONICAL as of 2026-07-24, adopted by owner decision: the ten stand-ins
+below are the benchmark inputs, full stop. The originally-named
+FIXTURE_INPUTS.md and fixture9_onepager.md are formally abandoned -- they
+do not exist anywhere in this repo's git history, at any commit, and will
+not be reconstructed.
+
+Verification pass run before adopting the label (per-fixture, not just
+asserted): (a) does the text match its own benchmark_suite.json
+input_type/input_hint, (b) does it exercise the archetype the fixture
+exists to test, (c) is anything in it factually wrong about the real
+product it names, checked against retrieval evidence already gathered
+across this engagement's many real runs (no new research). Result: **all
+10 fixtures passed all three checks as originally written -- zero text
+changes were needed in this pass.** That's not a coincidence; fixtures 3
+and 5 had already been through a dedicated enrichment+re-verification cycle
+earlier in this engagement specifically because an earlier version of each
+failed (b) (their evidence pillar had nothing to work with) -- this pass
+confirms that fix held. Specific notes:
+- Fixture 9 (b): text states "We have not yet submitted anything to the
+  FDA" verbatim -- unambiguously satisfies "must contain nothing implying
+  an FDA submission."
+- Fixture 10 (b): the outage is enforced by run_benchmark.py's respx mock
+  regardless of input content, so "does the text trigger outage handling"
+  is guaranteed by construction, not by anything in the text; confirmed via
+  this fixture never once failing to land NOT_SCORED/RETRIEVAL_FAILURE
+  across dozens of real runs this engagement.
+- Fixture 5 (b): the enriched clinical-validation paragraph (ICC 0.81,
+  sensitivity 85%, specificity 81%) is retained, not lost, in the current
+  text -- confirmed present.
+
+Each entry's specific assumption about what the (never-seen,
+now-superseded) FIXTURE_INPUTS.md/fixture9_onepager.md originals said:
 
   1. TAVR/SAPIEN 3: assumes a real-world-outcomes paper mentioning no FDA
      numbers or CPT codes at all (per benchmark_suite.json's own input_hint)
@@ -62,11 +87,13 @@ assumption about what the (never-seen) original said:
   10. Retrieval outage: input content is irrelevant by design (the fixture
       mocks a total API outage regardless of what's fed to Stage 1).
 
-The owner should review and either bless these as canonical stand-ins or
-replace them with the real originals; until then, treat any benchmark
-result that hinges on a specific factual claim in the text above (rather
-than the device's real, independently-retrieved regulatory/coding record)
-with proportionate skepticism.
+Adopted as canonical. A specific factual claim in the text above (e.g. a
+clinical trial's exact numbers) still isn't independently citable -- it's
+representative, not verbatim, per each entry's own note -- so continue to
+lean on the device's real, independently-retrieved regulatory/coding record
+over a specific number quoted from this file, same discipline as before.
+That's a property of how these fixtures work, not a sign they're still
+provisional.
 """
 
 FIXTURE_SOURCE_TEXT = {
