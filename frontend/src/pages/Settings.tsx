@@ -17,6 +17,7 @@ export function Settings() {
     queryFn: () => api.get<AppSettings>("/settings"),
   });
   const [apiKeyInput, setApiKeyInput] = useState("");
+  const [braveKeyInput, setBraveKeyInput] = useState("");
   const [modelInput, setModelInput] = useState("");
 
   const mutation = useMutation({
@@ -24,6 +25,7 @@ export function Settings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings"] });
       setApiKeyInput("");
+      setBraveKeyInput("");
     },
   });
 
@@ -111,6 +113,39 @@ export function Settings() {
           Current default model: <code>{data.openrouter_model || "not set"}</code>. Use an exact
           model slug, not a "latest" alias, for reproducible regulated analysis.
         </p>
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Web search (name-only fallback)
+        </h3>
+        <p className="text-xs text-slate-500">
+          Only used when a name-only submission's FDA/CMS lookup finds nothing: proposes a
+          candidate site for you to confirm before it's fetched and analyzed. Never used when a
+          document or link is already attached.
+        </p>
+        <div className="flex items-center gap-2 text-sm">
+          <span>Brave Search API key:</span>
+          <code className="rounded bg-slate-100 dark:bg-slate-900 px-2 py-0.5">
+            {data.brave_search_api_key_configured ? data.brave_search_api_key_masked : "not set"}
+          </code>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            placeholder="BSA..."
+            value={braveKeyInput}
+            onChange={(e) => setBraveKeyInput(e.target.value)}
+            className="flex-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 text-sm"
+          />
+          <button
+            className="rounded bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 px-3 py-1 text-sm disabled:opacity-50"
+            disabled={!braveKeyInput || mutation.isPending}
+            onClick={() => mutation.mutate({ brave_search_api_key: braveKeyInput })}
+          >
+            Save key
+          </button>
+        </div>
       </section>
 
       <section className="space-y-3">

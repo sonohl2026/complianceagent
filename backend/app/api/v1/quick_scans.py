@@ -14,7 +14,7 @@ from app.models.enums import JobStatus
 from app.models.job import Job
 from app.models.product import Product
 from app.schemas.job import JobRead
-from app.schemas.quick_scan import OverrideRequest
+from app.schemas.quick_scan import ConfirmSiteRequest, OverrideRequest
 from app.services.crawling.fetch import safe_fetch
 from app.services.jobs.enqueue import enqueue_job
 from app.services.llm.cost_estimate import preflight_credit_check
@@ -220,5 +220,45 @@ async def override_quick_scan(
     await db.refresh(analysis_run)
 
     await enqueue_job(db, job, quick_scan_override_task, str(job.id), str(analysis_run.id), also_fail=[analysis_run])
+
+    return job
+
+
+@router.post("/quick-scans/{analysis_id}/confirm-site", response_model=JobRead, status_code=202)
+async def confirm_candidate_site(
+    analysis_id: uuid.UUID, payload: ConfirmSiteRequest, db: AsyncSession = Depends(get_db)
+) -> Job:
+    """Confirms the web-search candidate proposed after a name-only
+    submission's zero-hit (pipeline.py::_find_candidate_site). Once
+    confirmed, this is functionally identical to a name+link submission --
+    the confirmed URL is fetched and run through the standard extract-then-
+    retrieve-then-synthesize flow, straight through to completion (one
+    confirmation, not two: the user already confirmed the site itself)."""
+    analysis_run = await db.get(AnalysisRun, analysis_id)
+    if analysis_run is None or analysis_run.analysis_type != "quick_scan":
+        raise HTTPException(status_code=404, detail="Quick scan not found")
+    if analysis_run.status != JobStatus.AWAITING_CONFIRMATION:
+        raise HTTPException(status_code=400, detail="Can only confirm a site on an awaiting-confirmation quick scan")
+
+    source_text = await _resolve_source_text_from_url(payload.url)
+    if not source_text.strip():
+        raise HTTPException(status_code=400, detail="No text could be extracted from that site.")
+
+    name_hint = analysis_run.input_snapshot_json.get("product_name_hint")
+    analysis_run.input_snapshot_json = {
+        "source_text": source_text, "source_url": payload.url, "product_name_hint": name_hint,
+    }
+    analysis_run.status = JobStatus.QUEUED
+    analysis_run.error_summary = None
+    db.add(analysis_run)
+    await db.flush()
+
+    job = Job(job_type="quick_scan", status=JobStatus.QUEUED, related_id=analysis_run.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    await db.refresh(analysis_run)
+
+    await enqueue_job(db, job, run_quick_scan_task, str(job.id), str(analysis_run.id), also_fail=[analysis_run])
 
     return job

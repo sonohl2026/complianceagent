@@ -4,6 +4,7 @@ from app.services.evidence_retrieval.orchestrator import EvidenceBundle
 from app.services.evidence_retrieval.types import RetrievalStatus, SourceEvidence
 from app.services.quick_scan import pipeline
 from app.services.quick_scan.schemas import Stage1Extraction
+from app.services.web_search.brave_client import BraveSearchError, WebSearchResult
 
 
 def _stage1(name="Widget X1", aliases=None, search_terms=None):
@@ -46,7 +47,9 @@ class _FakeLLM:
         raise AssertionError("Name-only identity resolution must never call Stage 1/an LLM directly")
 
 
-async def _run_identity_resolution(monkeypatch, bundle: EvidenceBundle, product_name: str = "Acme Widget"):
+async def _run_identity_resolution(
+    monkeypatch, bundle: EvidenceBundle, product_name: str = "Acme Widget", settings: dict | None = None,
+):
     async def fake_retrieval(stage1, on_progress=None, settings=None):
         assert stage1.product_name == product_name
         if on_progress:
@@ -59,7 +62,7 @@ async def _run_identity_resolution(monkeypatch, bundle: EvidenceBundle, product_
 
     monkeypatch.setattr(pipeline, "run_evidence_retrieval", fake_retrieval)
     monkeypatch.setattr(pipeline, "_add_fee_schedule_evidence", fake_fee_schedule)
-    monkeypatch.setattr(pipeline, "load_runtime_settings", lambda: {})
+    monkeypatch.setattr(pipeline, "load_runtime_settings", lambda: settings or {})
 
     analysis_run = MagicMock()
     analysis_run.retrieval_progress_json = {}
@@ -102,3 +105,55 @@ async def test_identity_resolution_reports_no_hit_when_nothing_found(monkeypatch
 
     assert identity_found is False
     assert analysis_run.current_stage == "awaiting_confirmation"
+    assert "candidate_site" not in analysis_run.retrieval_bundle_json  # no API key configured in this test
+
+
+_MISS_BUNDLE = EvidenceBundle(
+    sources={"openfda_510k": SourceEvidence(source="openfda_510k", status=RetrievalStatus.MISS, latency_ms=5)},
+    all_openfda_failed=False, all_cms_failed=False,
+)
+
+
+async def test_identity_resolution_offers_candidate_site_on_a_zero_hit(monkeypatch):
+    async def fake_search(query, api_key, count=1):
+        assert query == "Nonexistent Gadget 9000"
+        assert api_key == "brave-key"
+        return [WebSearchResult(title="Gadget Co", url="https://example.com/gadget", snippet="The real gadget.")]
+
+    monkeypatch.setattr(pipeline, "brave_search", fake_search)
+    identity_found, analysis_run = await _run_identity_resolution(
+        monkeypatch, _MISS_BUNDLE, product_name="Nonexistent Gadget 9000",
+        settings={"brave_search_api_key": "brave-key"},
+    )
+
+    assert identity_found is False
+    assert analysis_run.retrieval_bundle_json["candidate_site"] == {
+        "title": "Gadget Co", "url": "https://example.com/gadget", "snippet": "The real gadget.",
+    }
+
+
+async def test_identity_resolution_skips_search_without_an_api_key(monkeypatch):
+    async def fake_search(query, api_key, count=1):
+        raise AssertionError("must not search without a configured API key")
+
+    monkeypatch.setattr(pipeline, "brave_search", fake_search)
+    identity_found, analysis_run = await _run_identity_resolution(
+        monkeypatch, _MISS_BUNDLE, product_name="Nonexistent Gadget 9000", settings={},
+    )
+
+    assert identity_found is False
+    assert "candidate_site" not in analysis_run.retrieval_bundle_json
+
+
+async def test_identity_resolution_tolerates_a_search_provider_failure(monkeypatch):
+    async def fake_search(query, api_key, count=1):
+        raise BraveSearchError("rate limited")
+
+    monkeypatch.setattr(pipeline, "brave_search", fake_search)
+    identity_found, analysis_run = await _run_identity_resolution(
+        monkeypatch, _MISS_BUNDLE, product_name="Nonexistent Gadget 9000",
+        settings={"brave_search_api_key": "brave-key"},
+    )
+
+    assert identity_found is False
+    assert "candidate_site" not in analysis_run.retrieval_bundle_json

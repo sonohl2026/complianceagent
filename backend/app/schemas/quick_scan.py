@@ -21,3 +21,11 @@ class OverrideItem(BaseModel):
 
 class OverrideRequest(BaseModel):
     overrides: list[OverrideItem]
+
+
+class ConfirmSiteRequest(BaseModel):
+    """Confirms the web-search candidate site proposed on a name-only
+    submission's zero-hit (see pipeline.py::_find_candidate_site) -- the
+    confirmed URL is fetched and analyzed like any other link submission."""
+
+    url: str

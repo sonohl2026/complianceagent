@@ -1,6 +1,8 @@
 export interface AppSettings {
   openrouter_api_key_configured: boolean;
   openrouter_api_key_masked: string;
+  brave_search_api_key_configured: boolean;
+  brave_search_api_key_masked: string;
   openrouter_model: string;
   openrouter_extraction_model: string;
   openrouter_synthesis_model: string;
@@ -21,6 +23,7 @@ export interface AppSettings {
 
 export interface AppSettingsUpdate {
   openrouter_api_key?: string;
+  brave_search_api_key?: string;
   openrouter_model?: string;
   openrouter_extraction_model?: string;
   openrouter_synthesis_model?: string;

@@ -78,9 +78,11 @@ async def _run_identity_resolution(job_id: str, analysis_run_id: str, product_na
                 job.progress_percent = 100
                 job.current_stage = "awaiting_confirmation"
                 analysis_run.status = JobStatus.AWAITING_CONFIRMATION
-                if not identity_found:
+                has_candidate_site = "candidate_site" in analysis_run.retrieval_bundle_json
+                if not identity_found and not has_candidate_site:
                     analysis_run.error_summary = (
-                        "No FDA/coverage record found under that name. Correct the name or attach a document."
+                        "No FDA/coverage record found under that name, and no candidate site turned up "
+                        "either. Correct the name or attach a document."
                     )
             except _FAILURE_EXCEPTIONS as exc:
                 job.status = JobStatus.FAILED

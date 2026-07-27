@@ -6,6 +6,8 @@ class AppSettingsPublic(BaseModel):
 
     openrouter_api_key_configured: bool
     openrouter_api_key_masked: str
+    brave_search_api_key_configured: bool
+    brave_search_api_key_masked: str
     openrouter_model: str
     openrouter_extraction_model: str
     openrouter_synthesis_model: str
@@ -35,6 +37,7 @@ class AppSettingsPublic(BaseModel):
 
 class AppSettingsUpdate(BaseModel):
     openrouter_api_key: str | None = None
+    brave_search_api_key: str | None = None
     openrouter_model: str | None = None
     openrouter_extraction_model: str | None = None
     openrouter_synthesis_model: str | None = None

@@ -14,6 +14,8 @@ def _to_public(data: dict) -> AppSettingsPublic:
     return AppSettingsPublic(
         openrouter_api_key_configured=bool(data.get("openrouter_api_key")),
         openrouter_api_key_masked=mask_secret(data.get("openrouter_api_key", "")),
+        brave_search_api_key_configured=bool(data.get("brave_search_api_key")),
+        brave_search_api_key_masked=mask_secret(data.get("brave_search_api_key", "")),
         openrouter_model=data.get("openrouter_model", ""),
         openrouter_extraction_model=data.get("openrouter_extraction_model", ""),
         openrouter_synthesis_model=data.get("openrouter_synthesis_model", ""),

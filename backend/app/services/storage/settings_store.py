@@ -18,6 +18,11 @@ _lock = threading.Lock()
 
 DEFAULTS: dict[str, Any] = {
     "openrouter_api_key": "",
+    # Name-only submission fallback (see quick_scan/pipeline.py's
+    # run_quick_scan_identity_resolution): only ever queried when openFDA/CMS
+    # retrieval on the typed name comes back with zero hits, to find a
+    # candidate site the user can confirm before it's fetched and analyzed.
+    "brave_search_api_key": "",
     "openrouter_model": "",
     "openrouter_extraction_model": "",
     "openrouter_synthesis_model": "",

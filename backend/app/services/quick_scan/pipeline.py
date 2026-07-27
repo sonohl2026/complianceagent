@@ -19,6 +19,7 @@ from app.services.quick_scan.scoring_enforcement import enforce
 from app.services.quick_scan.stage1_extraction import UsageCallback, run_stage1
 from app.services.quick_scan.stage3_synthesis import run_stage3
 from app.services.storage.settings_store import load_runtime_settings
+from app.services.web_search.brave_client import BraveSearchError, WebSearchResult, search as brave_search
 
 
 async def _add_fee_schedule_evidence(
@@ -229,6 +230,24 @@ def _seed_stage1_from_name(product_name: str) -> Stage1Extraction:
     )
 
 
+async def _find_candidate_site(product_name: str) -> WebSearchResult | None:
+    """Web-search fallback for a name-only submission that openFDA/CMS
+    retrieval couldn't resolve at all. Only ever reached on a genuine zero-
+    hit -- never a general evidence-gathering search, and capped at one
+    query returning one candidate (the top result), matching the narrow
+    "propose a site, let the user confirm it" ask this closes, not a
+    broader research capability."""
+    settings = load_runtime_settings()
+    api_key = settings.get("brave_search_api_key")
+    if not api_key:
+        return None
+    try:
+        results = await brave_search(product_name, api_key, count=1)
+    except BraveSearchError:
+        return None  # a search-provider failure must never take down the run
+    return results[0] if results else None
+
+
 async def run_quick_scan_identity_resolution(
     db: AsyncSession, analysis_run: AnalysisRun, llm: LLMProvider, model: str, product_name: str,
 ) -> bool:
@@ -236,9 +255,13 @@ async def run_quick_scan_identity_resolution(
     run retrieval only, then stop for user confirmation instead of
     continuing straight to Stage 3 -- the resolved identity may be wrong
     (wrong device, ambiguous name) and Stage 3 is the expensive, hard-to-undo
-    step. Returns whether retrieval found anything at all under the name, so
-    the caller can tell the user plainly when it didn't, rather than
-    continuing toward a silent NOT_SCORED."""
+    step. Returns whether retrieval found anything at all under the name.
+
+    On a zero-hit, also tries one web search for a candidate site (see
+    _find_candidate_site) so the confirmation screen can offer "is this the
+    right site?" instead of a dead end -- persisted into
+    retrieval_bundle_json alongside stage1/sources so the confirm-site
+    endpoint and the frontend can both read it back."""
     settings = load_runtime_settings()
     extraction_model = settings.get("openrouter_extraction_model") or model
 
@@ -261,10 +284,18 @@ async def run_quick_scan_identity_resolution(
 
     identity_found = any(e.status == RetrievalStatus.HIT for e in bundle.sources.values())
 
-    analysis_run.retrieval_bundle_json = {
+    retrieval_bundle_json = {
         "stage1": stage1.model_dump(),
         "sources": {name: _evidence_to_dict(e) for name, e in bundle.sources.items()},
     }
+    if not identity_found:
+        candidate = await _find_candidate_site(product_name)
+        if candidate is not None:
+            retrieval_bundle_json["candidate_site"] = {
+                "title": candidate.title, "url": candidate.url, "snippet": candidate.snippet,
+            }
+
+    analysis_run.retrieval_bundle_json = retrieval_bundle_json
     analysis_run.current_stage = "awaiting_confirmation"
     await db.commit()
     return identity_found
