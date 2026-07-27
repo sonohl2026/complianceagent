@@ -34,6 +34,7 @@ const QUICK_SCAN_STAGE_LABELS: Record<string, string> = {
   stage1_extraction: "Identifying product",
   retrieval: "Retrieving evidence (openFDA, CMS)",
   stage3_synthesis: "Synthesizing assessment",
+  awaiting_confirmation: "Waiting for you to confirm the identified product",
 };
 
 /** "synthesis" -> "Synthesis (5/6)". Falls back to the raw stage name for
@@ -45,6 +46,7 @@ export function formatAnalysisStage(stage: string | null | undefined): string {
   if (quickScanIndex !== -1) {
     return `${QUICK_SCAN_STAGE_LABELS[stage]} (${quickScanIndex + 1}/${QUICK_SCAN_STAGE_ORDER.length})`;
   }
+  if (stage === "awaiting_confirmation") return QUICK_SCAN_STAGE_LABELS.awaiting_confirmation;
   const index = ANALYSIS_STAGE_ORDER.indexOf(stage);
   if (index === -1) return stage;
   return `${STAGE_LABELS[stage] ?? stage} (${index + 1}/${ANALYSIS_STAGE_ORDER.length})`;

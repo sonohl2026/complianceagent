@@ -3,10 +3,7 @@ import { NavLink, Outlet } from "react-router-dom";
 import { useDarkMode } from "../hooks/useDarkMode";
 
 const PRIMARY_NAV_ITEMS = [
-  { to: "/", label: "Dashboard", end: true },
-  { to: "/new-analysis", label: "New Analysis" },
-  { to: "/analyses", label: "Past Analyses" },
-  { to: "/monitoring", label: "Monitoring" },
+  { to: "/", label: "Products", end: true },
   { to: "/settings", label: "Settings" },
 ];
 

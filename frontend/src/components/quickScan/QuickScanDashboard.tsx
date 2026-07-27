@@ -6,6 +6,7 @@ import { StatusBadge } from "../StatusBadge";
 import type { AnalysisRun, QuickScanAssessment } from "../../types/analysis";
 import type { AppSettings } from "../../types/settings";
 import { formatAnalysisStage } from "../../utils/analysisStages";
+import { BillingCodesSection } from "./BillingCodesSection";
 import { Gauge } from "./Gauge";
 import { PILLAR_ORDER, PillarCard } from "./PillarCard";
 import { ProductIdentityEdit } from "./ProductIdentityEdit";
@@ -84,6 +85,10 @@ export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
             </div>
           </div>
 
+          {/* Scores first (MVP lockdown Step 4): the first of the three
+              deliverables. NOT_SCORED reads as an early-stage state to work
+              from, never an error -- the gaps below ARE the deliverable for
+              a pre-clearance founder, not a consolation message. */}
           <div className="rounded border border-slate-200 dark:border-slate-800 p-4">
             <div className="flex flex-wrap justify-center gap-8">
               <Gauge
@@ -96,9 +101,8 @@ export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
             </div>
             {result.scores.maturity_state === "NOT_SCORED" && (
               <p className="mt-3 text-center text-sm text-amber-700 dark:text-amber-400">
-                {result.scores.not_scored_reason === "INSUFFICIENT_DATA_RETRIEVED"
-                  ? "Not enough real evidence was retrieved to assess maturity -- this is never shown as a numeric 0."
-                  : result.scores.not_scored_reason}
+                Early-stage -- not enough real evidence exists yet to give this a maturity number.
+                That's the finding, not a gap in the tool: see what's missing below.
               </p>
             )}
             <p className="mt-3 text-center text-sm text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">
@@ -106,9 +110,46 @@ export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
             </p>
           </div>
 
+          {/* Billing codes: the second deliverable, promoted to first-class
+              rather than buried in the coding pillar's expander. */}
+          <BillingCodesSection
+            run={run}
+            codingPillar={result.pillars.find((p) => p.pillar === "coding")}
+            cptLicenseEnabled={settings?.cpt_license ?? false}
+          />
+
+          {/* Gaps blocking coverage: the third deliverable, above the fold. */}
+          {(result.top_gaps.length > 0 || result.next_steps.length > 0) && (
+            <section className="rounded border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Gaps blocking coverage
+              </h3>
+              {result.top_gaps.length > 0 && (
+                <ul className="list-disc list-inside text-sm space-y-1">
+                  {result.top_gaps.map((g, i) => (
+                    <li key={i}>{g}</li>
+                  ))}
+                </ul>
+              )}
+              {result.next_steps.length > 0 && (
+                <div className="pt-1 border-t border-slate-100 dark:border-slate-900">
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500 mb-1">
+                    What to do about it
+                  </p>
+                  <ul className="list-disc list-inside text-sm space-y-1">
+                    {result.next_steps.map((s, i) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Pillar detail: a compact secondary strip, not the headline. */}
           <section className="space-y-3">
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Pillars</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Pillar detail</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {PILLAR_ORDER.map(({ key }) => {
                 const pillar = result.pillars.find((p) => p.pillar === key);
                 return pillar ? (
@@ -117,28 +158,6 @@ export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
               })}
             </div>
           </section>
-
-          {result.top_gaps.length > 0 && (
-            <section>
-              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500 mb-2">Top gaps</h3>
-              <ul className="list-disc list-inside text-sm space-y-1">
-                {result.top_gaps.map((g, i) => (
-                  <li key={i}>{g}</li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {result.next_steps.length > 0 && (
-            <section>
-              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500 mb-2">Next steps</h3>
-              <ul className="list-disc list-inside text-sm space-y-1">
-                {result.next_steps.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ul>
-            </section>
-          )}
 
           <div className="rounded border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950 p-4 text-xs">
             {result.disclaimer}

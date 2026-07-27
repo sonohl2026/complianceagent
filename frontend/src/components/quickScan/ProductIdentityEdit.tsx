@@ -17,9 +17,17 @@ const EDITABLE_FIELDS: { key: string; label: string }[] = [
   { key: "technology_type", label: "Technology type" },
 ];
 
-export function ProductIdentityEdit({ run }: { run: AnalysisRun }) {
+export function ProductIdentityEdit({
+  run,
+  forceOpen = false,
+  onDone,
+}: {
+  run: AnalysisRun;
+  forceOpen?: boolean;
+  onDone?: () => void;
+}) {
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(forceOpen);
   const [values, setValues] = useState<Record<string, string>>({});
 
   const overrideMutation = useMutation({
@@ -30,9 +38,13 @@ export function ProductIdentityEdit({ run }: { run: AnalysisRun }) {
           .map(([key, value]) => ({ target: "product", key, value })),
       }),
     onSuccess: () => {
-      setOpen(false);
+      setOpen(forceOpen);
       setValues({});
       queryClient.invalidateQueries({ queryKey: ["analysis", run.id] });
+      if (run.product_id) {
+        queryClient.invalidateQueries({ queryKey: ["analysis", "latest-for-product", run.product_id] });
+      }
+      onDone?.();
     },
   });
 
@@ -90,7 +102,10 @@ export function ProductIdentityEdit({ run }: { run: AnalysisRun }) {
           {overrideMutation.isPending ? "Re-running…" : "Save and re-run"}
         </button>
         <button
-          onClick={() => setOpen(false)}
+          onClick={() => {
+            setOpen(false);
+            onDone?.();
+          }}
           className="text-xs rounded border border-slate-300 dark:border-slate-700 px-3 py-1.5"
         >
           Cancel

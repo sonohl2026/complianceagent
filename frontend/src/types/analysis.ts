@@ -1,4 +1,4 @@
-export type AnalysisStatus = "QUEUED" | "RUNNING" | "COMPLETE" | "FAILED" | "CANCELLED";
+export type AnalysisStatus = "QUEUED" | "RUNNING" | "COMPLETE" | "FAILED" | "CANCELLED" | "AWAITING_CONFIRMATION";
 export type Verdict = "GO" | "CONDITIONAL_GO" | "STOP";
 export type RiskLevel = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
@@ -65,9 +65,21 @@ export interface RetrievalProgressEntry {
   match_confidence: string | null;
 }
 
+export interface FeeScheduleVerifiedCode {
+  code: string;
+  code_format: string;
+  payment_system: string;
+  rate_usd: number | null;
+  status_code: string | null;
+  // Always null for CPT-format codes (AMA-licensed content, never persisted
+  // here regardless of cpt_license -- see code_candidates.py). Populated
+  // only for HCPCS Level II (public domain).
+  description: string | null;
+}
+
 export interface AnalysisRun {
   id: string;
-  project_id: string;
+  project_id: string | null;
   product_id: string | null;
   analysis_type: string;
   status: AnalysisStatus;

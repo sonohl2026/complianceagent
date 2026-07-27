@@ -8,6 +8,7 @@ const COLORS: Record<string, string> = {
   QUARANTINED: "bg-risk-critical/15 text-risk-critical",
   CANCELLED: "bg-slate-200 text-slate-500 dark:bg-slate-800",
   STALE: "bg-risk-high/15 text-risk-high",
+  AWAITING_CONFIRMATION: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
 };
 
 export function StatusBadge({ status }: { status: string }) {
