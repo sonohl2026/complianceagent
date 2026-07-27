@@ -114,6 +114,7 @@ async def start_quick_scan(
     product_name: str = Form(""),
     source_urls: list[str] = Form(default=[]),
     files: list[UploadFile] = File(default=[]),
+    product_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ) -> Job:
     """The single entry point (MVP lockdown Step 2): any mix of files, links,
@@ -121,7 +122,12 @@ async def start_quick_scan(
     material (files/links) always drives the standard extract-from-text
     flow; a bare name skips straight to the name-only identity-confirmation
     flow (Step 3); both together let the name seed identity while the
-    material still feeds evidence."""
+    material still feeds evidence.
+
+    product_id, when given, re-runs against an existing product (a fresh
+    AnalysisRun under it) instead of creating a new one -- the Products
+    list's "Re-run" action uses this so re-analyzing a device doesn't leave
+    a duplicate product behind."""
     name = product_name.strip()
     source_texts = await _gather_source_texts(files, source_urls)
     has_material = any(text.strip() for text in source_texts)
@@ -139,10 +145,15 @@ async def start_quick_scan(
     if credit_error:
         raise HTTPException(status_code=402, detail=credit_error)
 
-    company = await _get_or_create_default_company(db)
-    product = Product(company_id=company.id, name=name or "Untitled product")
-    db.add(product)
-    await db.flush()
+    if product_id:
+        product = await db.get(Product, uuid.UUID(product_id))
+        if product is None:
+            raise HTTPException(status_code=404, detail="Product not found")
+    else:
+        company = await _get_or_create_default_company(db)
+        product = Product(company_id=company.id, name=name or "Untitled product")
+        db.add(product)
+        await db.flush()
 
     if has_material:
         source_text = _fair_share_merge(source_texts, _MAX_MERGED_CHARS)

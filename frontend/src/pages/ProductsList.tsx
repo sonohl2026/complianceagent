@@ -1,4 +1,5 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
@@ -13,6 +14,7 @@ import type { ProductSummary } from "../types/product";
 export function ProductsList() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const { data: products, isLoading } = useQuery({
     queryKey: ["products"],
@@ -22,6 +24,14 @@ export function ProductsList() {
         (p) => p.latest_run_status === "QUEUED" || p.latest_run_status === "RUNNING",
       );
       return hasActive ? 3000 : false;
+    },
+  });
+
+  const deleteProduct = useMutation({
+    mutationFn: (id: string) => api.del(`/products/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      setConfirmDeleteId(null);
     },
   });
 
@@ -42,6 +52,10 @@ export function ProductsList() {
         <p className="text-sm text-slate-500">No products yet -- run your first analysis above.</p>
       )}
 
+      {deleteProduct.isError && (
+        <p className="text-xs text-risk-critical">{(deleteProduct.error as Error).message}</p>
+      )}
+
       {products && products.length > 0 && (
         <table className="w-full text-sm border-collapse">
           <thead>
@@ -51,6 +65,7 @@ export function ProductsList() {
               <th className="py-2 pr-4">Maturity</th>
               <th className="py-2 pr-4">Risk</th>
               <th className="py-2 pr-4">Last updated</th>
+              <th className="py-2 pr-4"></th>
             </tr>
           </thead>
           <tbody>
@@ -72,6 +87,36 @@ export function ProductsList() {
                 </td>
                 <td className="py-2 pr-4 text-slate-500">
                   {p.latest_run_created_at ? new Date(p.latest_run_created_at).toLocaleString() : "—"}
+                </td>
+                <td className="py-2 pr-4">
+                  {confirmDeleteId === p.id ? (
+                    <div className="flex items-center gap-2 shrink-0 text-xs">
+                      <span className="text-slate-500">Delete "{p.name}" and all its scans?</span>
+                      <button
+                        className="text-risk-critical underline disabled:opacity-50"
+                        disabled={deleteProduct.isPending}
+                        onClick={() => deleteProduct.mutate(p.id)}
+                      >
+                        Confirm
+                      </button>
+                      <button className="text-slate-500 underline" onClick={() => setConfirmDeleteId(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-3 shrink-0 text-xs">
+                      <Link to={`/products/${p.id}`} className="text-slate-500 hover:underline">
+                        Re-run
+                      </Link>
+                      <button
+                        className="text-slate-400 hover:text-risk-critical"
+                        title="Delete product"
+                        onClick={() => setConfirmDeleteId(p.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}

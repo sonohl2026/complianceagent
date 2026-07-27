@@ -66,3 +66,23 @@ async def list_product_runs(product_id: uuid.UUID, db: AsyncSession = Depends(ge
         .order_by(AnalysisRun.created_at.desc())
     )
     return list(result.scalars().all())
+
+
+@router.delete("/products/{product_id}", status_code=204)
+async def delete_product(product_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> None:
+    """Clears a product and every analysis run against it. AnalysisRun.
+    product_id is ondelete=SET NULL (kept conservative for the migration-0012
+    backfill's own rows), so runs are deleted explicitly here first rather
+    than left behind as orphaned, invisible clutter -- the whole point of
+    this endpoint is "make this product and its history actually go away."
+    ComplianceIssue rows cascade automatically (already ondelete=CASCADE)."""
+    product = await db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    runs = (await db.execute(select(AnalysisRun).where(AnalysisRun.product_id == product_id))).scalars().all()
+    for run in runs:
+        await db.delete(run)
+
+    await db.delete(product)
+    await db.commit()

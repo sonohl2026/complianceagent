@@ -15,9 +15,21 @@ const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".html",
 /** MVP lockdown Step 2: the single entry point. A user can freely mix any
  * number of file uploads, web links, and/or a typed product name, then hit
  * one button. Behavior branches server-side on what's actually present --
- * this component just gathers whatever the user gave it. */
-export function Composer({ onStarted }: { onStarted: (job: Job) => void }) {
-  const [name, setName] = useState("");
+ * this component just gathers whatever the user gave it.
+ *
+ * Passing productId re-runs against that existing product (a fresh
+ * AnalysisRun under it) instead of creating a new one -- the "Run a new
+ * scan" affordance on a product's own results page uses this. */
+export function Composer({
+  onStarted,
+  productId,
+  defaultName = "",
+}: {
+  onStarted: (job: Job) => void;
+  productId?: string;
+  defaultName?: string;
+}) {
+  const [name, setName] = useState(defaultName);
   const [urls, setUrls] = useState<string[]>([""]);
   const [files, setFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -44,12 +56,13 @@ export function Composer({ onStarted }: { onStarted: (job: Job) => void }) {
       for (const url of urls) {
         if (url.trim()) formData.append("source_urls", url.trim());
       }
+      if (productId) formData.append("product_id", productId);
       const response = await fetch(`${API_BASE_URL}/quick-scans`, { method: "POST", body: formData });
       if (!response.ok) throw new Error(parseErrorDetail(await response.text(), response.statusText));
       return (await response.json()) as Job;
     },
     onSuccess: (job) => {
-      setName("");
+      setName(defaultName);
       setUrls([""]);
       setFiles([]);
       onStarted(job);
@@ -61,10 +74,11 @@ export function Composer({ onStarted }: { onStarted: (job: Job) => void }) {
   return (
     <div className="rounded border border-slate-200 dark:border-slate-800 p-5 space-y-4">
       <div>
-        <h3 className="text-sm font-semibold">Analyze a device</h3>
+        <h3 className="text-sm font-semibold">{productId ? "Run a new scan" : "Analyze a device"}</h3>
         <p className="text-xs text-slate-500 mt-1">
-          Type a product name, attach documents, add links -- any mix works. If you just type a
-          name, we'll look it up and check with you before running the full assessment.
+          {productId
+            ? "Attach fresh material or just re-check the name -- this adds a new scan to this product, it won't create a duplicate."
+            : "Type a product name, attach documents, add links -- any mix works. If you just type a name, we'll look it up and check with you before running the full assessment."}
         </p>
       </div>
 
