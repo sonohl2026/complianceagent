@@ -37,6 +37,12 @@ export function Settings() {
     <div className="max-w-2xl space-y-6">
       <h2 className="text-lg font-semibold">Settings</h2>
 
+      {mutation.isError && (
+        <div className="rounded border border-risk-critical/40 bg-risk-critical/5 p-3 text-sm text-risk-critical">
+          Save failed: {(mutation.error as Error).message}. Nothing below was changed -- try again.
+        </div>
+      )}
+
       <div className="flex gap-1 border-b border-slate-200 dark:border-slate-800">
         {TABS.map((t) => (
           <button
