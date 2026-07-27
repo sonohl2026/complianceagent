@@ -6,8 +6,8 @@ from pydantic import BaseModel
 
 class RecentAnalysisRow(BaseModel):
     id: uuid.UUID
-    project_id: uuid.UUID
-    project_name: str
+    project_id: uuid.UUID | None
+    project_name: str | None
     product_name: str | None
     status: str
     overall_verdict: str | None

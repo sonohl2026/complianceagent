@@ -37,7 +37,7 @@ async def get_dashboard_summary(db: AsyncSession = Depends(get_db)) -> Dashboard
     rows = (
         await db.execute(
             select(AnalysisRun, Project.name, Product.name)
-            .join(Project, AnalysisRun.project_id == Project.id)
+            .outerjoin(Project, AnalysisRun.project_id == Project.id)
             .outerjoin(Product, AnalysisRun.product_id == Product.id)
             .order_by(AnalysisRun.created_at.desc())
             .limit(10)

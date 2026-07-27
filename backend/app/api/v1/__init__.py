@@ -11,6 +11,7 @@ from app.api.v1 import (
     jobs,
     metrics,
     monitoring,
+    products,
     projects,
     prompts,
     quick_scans,
@@ -23,6 +24,7 @@ api_router.include_router(health.router, tags=["health"])
 api_router.include_router(settings.router, tags=["settings"])
 api_router.include_router(companies.router, tags=["companies"])
 api_router.include_router(projects.router, tags=["projects"])
+api_router.include_router(products.router, tags=["products"])
 api_router.include_router(documents.router, tags=["documents"])
 api_router.include_router(authority.router, tags=["authority"])
 api_router.include_router(retrieval.router, tags=["retrieval"])

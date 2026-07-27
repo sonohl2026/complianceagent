@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analysis import AnalysisRun
 from app.services.evidence_retrieval.orchestrator import EvidenceBundle, run_evidence_retrieval
-from app.services.evidence_retrieval.types import SourceEvidence
+from app.services.evidence_retrieval.types import RetrievalStatus, SourceEvidence
 from app.services.llm.base import LLMProvider, LLMResult
 from app.services.quick_scan.code_candidates import resolve_fee_schedule_evidence
 from app.services.quick_scan.model_tier import warn_if_tier_split_inactive
@@ -94,7 +94,25 @@ def _make_usage_recorder(db: AsyncSession, analysis_run: AnalysisRun):
     return _record
 
 
-async def run_quick_scan(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMProvider, model: str, source_text: str) -> None:
+def _apply_name_hint(stage1: Stage1Extraction, product_name_hint: str) -> Stage1Extraction:
+    """MVP lockdown Step 2's 'name + documents' case: the typed name seeds
+    identity, documents feed evidence -- so the typed name wins over whatever
+    Stage 1 guessed from the material, but Stage 1's own guess is kept as an
+    alias rather than discarded."""
+    hint = product_name_hint.strip()
+    if not hint or hint.lower() == stage1.product_name.strip().lower():
+        return stage1
+    aliases = stage1.aliases
+    if stage1.product_name and stage1.product_name not in aliases:
+        aliases = [stage1.product_name, *aliases]
+    search_terms = [hint, *[t for t in stage1.candidate_search_terms if t != hint]]
+    return stage1.model_copy(update={"product_name": hint, "aliases": aliases, "candidate_search_terms": search_terms})
+
+
+async def run_quick_scan(
+    db: AsyncSession, analysis_run: AnalysisRun, llm: LLMProvider, model: str, source_text: str,
+    product_name_hint: str | None = None,
+) -> None:
     settings = load_runtime_settings()
     warn_if_tier_split_inactive(settings, context="quick_scan run")
     extraction_model = settings.get("openrouter_extraction_model") or model
@@ -105,6 +123,8 @@ async def run_quick_scan(db: AsyncSession, analysis_run: AnalysisRun, llm: LLMPr
     analysis_run.current_stage = "stage1_extraction"
     await db.commit()
     stage1 = await run_stage1(llm, extraction_model, source_text, on_usage=record_usage)
+    if product_name_hint:
+        stage1 = _apply_name_hint(stage1, product_name_hint)
 
     analysis_run.current_stage = "retrieval"
     analysis_run.retrieval_progress_json = {}
@@ -190,3 +210,61 @@ async def run_quick_scan_override(db: AsyncSession, analysis_run: AnalysisRun, l
     analysis_run.revision += 1
     analysis_run.current_stage = "complete"
     await db.commit()
+
+
+def _seed_stage1_from_name(product_name: str) -> Stage1Extraction:
+    """Name-only submission (MVP lockdown Step 3): the typed name IS the
+    product identity -- there's no material for Stage 1 to read, so this
+    skips that LLM call entirely rather than feeding it an empty/near-empty
+    prompt, and seeds just enough of a Stage1Extraction shape for retrieval
+    to search on."""
+    return Stage1Extraction(
+        product_name=product_name,
+        manufacturer="",
+        aliases=[],
+        intended_use="",
+        technology_type="",
+        dev_stage_guess="unknown",
+        candidate_search_terms=[product_name],
+    )
+
+
+async def run_quick_scan_identity_resolution(
+    db: AsyncSession, analysis_run: AnalysisRun, llm: LLMProvider, model: str, product_name: str,
+) -> bool:
+    """Name-only submission's first half: seed identity from the typed name,
+    run retrieval only, then stop for user confirmation instead of
+    continuing straight to Stage 3 -- the resolved identity may be wrong
+    (wrong device, ambiguous name) and Stage 3 is the expensive, hard-to-undo
+    step. Returns whether retrieval found anything at all under the name, so
+    the caller can tell the user plainly when it didn't, rather than
+    continuing toward a silent NOT_SCORED."""
+    settings = load_runtime_settings()
+    extraction_model = settings.get("openrouter_extraction_model") or model
+
+    record_usage = _make_usage_recorder(db, analysis_run)
+    stage1 = _seed_stage1_from_name(product_name)
+
+    analysis_run.current_stage = "retrieval"
+    analysis_run.retrieval_progress_json = {}
+    await db.commit()
+
+    async def on_progress(source_name: str, evidence: SourceEvidence) -> None:
+        analysis_run.retrieval_progress_json = {
+            **analysis_run.retrieval_progress_json,
+            source_name: _evidence_to_dict(evidence),
+        }
+        await db.commit()
+
+    bundle = await run_evidence_retrieval(stage1, on_progress=on_progress)
+    await _add_fee_schedule_evidence(llm, extraction_model, stage1, bundle, record_usage)
+
+    identity_found = any(e.status == RetrievalStatus.HIT for e in bundle.sources.values())
+
+    analysis_run.retrieval_bundle_json = {
+        "stage1": stage1.model_dump(),
+        "sources": {name: _evidence_to_dict(e) for name, e in bundle.sources.items()},
+    }
+    analysis_run.current_stage = "awaiting_confirmation"
+    await db.commit()
+    return identity_found

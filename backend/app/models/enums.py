@@ -44,6 +44,12 @@ class JobStatus(str, enum.Enum):
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    # quick_scan only (see migration 0012): a name-only submission pauses
+    # here after retrieval, before Stage 3, for the user to confirm or
+    # correct the resolved identity. Never used for Job/CrawlSnapshot rows --
+    # only the analysis_status Postgres enum type actually carries this
+    # value; adding it to the shared Python enum is just for typing/validation.
+    AWAITING_CONFIRMATION = "AWAITING_CONFIRMATION"
 
 
 class RobotsStatus(str, enum.Enum):

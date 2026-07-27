@@ -10,7 +10,7 @@ class AnalysisRunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    project_id: uuid.UUID
+    project_id: uuid.UUID | None
     product_id: uuid.UUID | None
     analysis_type: str
     status: JobStatus

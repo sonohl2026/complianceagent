@@ -37,6 +37,14 @@ celery_app.conf.update(
             "task": "fee_schedule.refresh_pfs",
             "schedule": 7 * 24 * 3600.0,
         },
+        # Confirmation-pause runs must not orphan (MVP lockdown Step 3) --
+        # the pause itself times out after 30 minutes, so this polls at 1/6th
+        # of that so no stale AWAITING_CONFIRMATION run waits much past its
+        # own deadline.
+        "expire-stale-confirmations": {
+            "task": "quick_scan.expire_stale_confirmations",
+            "schedule": 300.0,
+        },
     },
 )
 

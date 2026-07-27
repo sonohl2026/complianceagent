@@ -13,8 +13,10 @@ from app.models.enums import FindingDomain, JobStatus, RiskLevel, Verdict
 class AnalysisRun(UUIDPKMixin, TimestampMixin, Base):
     __tablename__ = "analysis_runs"
 
-    project_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    # Nullable since migration 0012 (MVP lockdown): new submissions have no
+    # project concept in the UI anymore. Kept, not dropped, for existing rows.
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE")
     )
     product_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("products.id", ondelete="SET NULL")

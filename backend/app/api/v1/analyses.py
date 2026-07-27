@@ -32,9 +32,12 @@ async def list_project_analyses(project_id: uuid.UUID, db: AsyncSession = Depend
 async def list_all_analyses(
     project_id: uuid.UUID | None = None, limit: int = 100, db: AsyncSession = Depends(get_db)
 ) -> list[RecentAnalysisRow]:
+    # Both joins are outer: project_id is nullable since migration 0012
+    # (MVP lockdown -- new submissions have no project at all), so an inner
+    # join here would silently drop every post-lockdown run from this list.
     query = (
         select(AnalysisRun, Project.name, Product.name)
-        .join(Project, AnalysisRun.project_id == Project.id)
+        .outerjoin(Project, AnalysisRun.project_id == Project.id)
         .outerjoin(Product, AnalysisRun.product_id == Product.id)
     )
     if project_id is not None:
