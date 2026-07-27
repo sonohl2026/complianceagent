@@ -73,23 +73,37 @@ Library/Search/Analyses/Settings as functional yet.
 
 ## Quickstart
 
+This is a fully local, self-contained app — no cloud account or hosting needed, just Docker. Every
+setting has a working default, so a `.env` file is optional, not required.
+
 ```bash
-cp .env.example .env
-# edit .env if you want non-default ports/credentials
-make build
-make up
-make migrate   # no-op until Milestone 2 adds the first models
+git clone https://github.com/wizbubba1/complianceagent.git
+cd complianceagent
+docker compose up --build
 ```
+
+That's it. The `api` container runs any pending database migrations automatically on every boot
+(safe to leave in place even once you're up to date — it's a no-op if there's nothing new), so
+there's no separate migration step for a fresh install. `make migrate` still exists if you ever
+want to run migrations manually without restarting the container (e.g. after pulling new code
+while `api` is still running from before the pull).
 
 Then open http://localhost:3000. The API is at http://localhost:8000/api/v1 (docs at
 http://localhost:8000/docs). Both are bound to `127.0.0.1` only — set `ALLOW_LAN_ACCESS=true` and
 `APP_HOST=0.0.0.0` in `.env` if you deliberately want LAN access (not recommended).
 
-### Add your OpenRouter key
+Closing the terminal doesn't stop anything (Docker Desktop keeps the containers running in the
+background) — use `make down` (or `docker compose down`) to actually stop it, or `make reset` to
+also wipe all local data and start clean.
 
-Settings → OpenRouter → paste the key → Save. The key is written to a local file under
-`data/storage/config/app_settings.json` on the API container's volume; it is never sent back to
-the browser (only a masked preview is shown) and is not committed to git.
+### Add your OpenRouter (and optional Brave Search) key
+
+Settings → paste the key(s) → Save. Keys live in this deployment's own local Postgres database
+(a `runtime_settings` table, not a file), so they persist across restarts but never leave your
+machine, are never sent back to the browser (only a masked preview is shown), and are not
+committed to git. Each separate `docker compose` deployment — e.g. a teammate's own laptop — has
+its own independent database, so keys (and all scan data) are never shared between machines unless
+you deliberately set that up.
 
 ### Stopping / resetting
 

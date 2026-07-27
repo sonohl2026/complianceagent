@@ -79,7 +79,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    # Runs migrations once on every boot before serving traffic -- makes a
+    # first-time `docker compose up` fully self-contained (no separate
+    # `alembic upgrade head` step for a teammate to know about or forget).
+    # alembic upgrade is a no-op if already at head, so this is safe on every
+    # restart, not just the first one.
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
 
   worker:
     build:
