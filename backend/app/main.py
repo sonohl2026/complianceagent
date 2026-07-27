@@ -30,12 +30,17 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
-# Local-first: the frontend dev server is the only expected browser origin.
+# Local dev origins always allowed; ADDITIONAL_CORS_ORIGINS (e.g. the
+# deployed Vercel URL) extends this for a hosted deployment without a code
+# change per environment.
+_extra_origins = [origin.strip() for origin in settings.additional_cors_origins.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         f"http://localhost:{settings.frontend_port}",
         f"http://127.0.0.1:{settings.frontend_port}",
+        *_extra_origins,
     ],
     allow_credentials=False,
     allow_methods=["*"],

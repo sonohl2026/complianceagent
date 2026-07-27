@@ -1,0 +1,62 @@
+# Render Blueprint for the hosted deployment (frontend goes to Vercel
+# separately -- see DEPLOYMENT.md). All three services build from the same
+# image (render.Dockerfile, repo-root build context so it can reach both
+# backend/ and prompts/), differing only in start command -- mirrors
+# docker-compose.yml's api/worker/scheduler split exactly.
+#
+# Cost note, read before deploying: Render's free tier covers the web
+# service (it sleeps after 15 min idle, first request after that is slow
+# to wake it back up). Persistent Background Worker services (the
+# `worker` and `scheduler` entries below) are not part of that free
+# allowance on Render as of when this was written -- expect Render's
+# cheapest paid tier for those two. Check Render's current pricing before
+# deploying; this file doesn't set `plan` on them so Render prompts you to
+# pick one rather than silently assuming a price.
+databases: []
+
+services:
+  - type: web
+    name: medtech-agent-api
+    runtime: docker
+    dockerfilePath: ./render.Dockerfile
+    dockerContext: .
+    dockerCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    plan: free
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false # paste your Neon connection string (postgresql+psycopg://...)
+      - key: REDIS_URL
+        sync: false # paste your Upstash Redis connection string (rediss://...)
+      - key: ADDITIONAL_CORS_ORIGINS
+        sync: false # your Vercel URL, e.g. https://your-app.vercel.app
+      - key: SECRET_KEY
+        generateValue: true
+
+  - type: worker
+    name: medtech-agent-worker
+    runtime: docker
+    dockerfilePath: ./render.Dockerfile
+    dockerContext: .
+    dockerCommand: "celery -A app.workers.celery_app worker --loglevel=INFO"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+
+  - type: worker
+    name: medtech-agent-scheduler
+    runtime: docker
+    dockerfilePath: ./render.Dockerfile
+    dockerContext: .
+    dockerCommand: "celery -A app.workers.celery_app beat --loglevel=INFO"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true

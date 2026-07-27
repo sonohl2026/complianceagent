@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     app_host: str = "127.0.0.1"
     api_port: int = 8000
     frontend_port: int = 3000
+    # Comma-separated extra CORS origins, e.g. the deployed Vercel URL
+    # (https://your-app.vercel.app) -- the localhost origins below always
+    # stay allowed regardless, so local dev keeps working unchanged.
+    additional_cors_origins: str = ""
 
     database_url: str = "postgresql+psycopg://medtech:change-me@postgres:5432/medtech_agent"
     redis_url: str = "redis://redis:6379/0"

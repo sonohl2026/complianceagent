@@ -1,20 +1,20 @@
-"""File-backed store for mutable runtime settings.
+"""Database-backed store for mutable runtime settings.
 
-Runtime settings (OpenRouter key, model slugs, privacy toggles) are kept as a
-local JSON file under the storage root rather than in the database, so that a
-fresh checkout with no migrations applied can still boot and accept a key
-through the UI. This is intentionally simple: it is a single local file, never
-transmitted anywhere, and never rendered back to the browser un-redacted.
+Runtime settings (OpenRouter/Brave API keys, model slugs, privacy toggles)
+live in a single-row `runtime_settings` table rather than a local file
+(see migration 0013): a host like Render's free tier has no persistent disk
+across restarts/redeploys, so a file would silently reset to defaults --
+losing the configured API keys -- on every deploy. Deliberately synchronous
+(a small dedicated engine, not the app's async one) so none of this
+function's existing call sites need to change to async/await.
 """
 
 import json
-import threading
-from pathlib import Path
 from typing import Any
 
-from app.config import get_settings
+from sqlalchemy import create_engine, text
 
-_lock = threading.Lock()
+from app.config import get_settings
 
 DEFAULTS: dict[str, Any] = {
     "openrouter_api_key": "",
@@ -48,34 +48,52 @@ DEFAULTS: dict[str, Any] = {
     "cpt_license": False,
 }
 
+_ROW_ID = 1
 
-def _settings_file() -> Path:
-    settings = get_settings()
-    config_dir = settings.storage_path / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    return config_dir / "app_settings.json"
+
+def _sync_engine():
+    # settings.database_url is already the sync psycopg (v3) dialect
+    # ("postgresql+psycopg://...") -- app/database.py rewrites it to
+    # asyncpg for the app's own async engine; this one deliberately stays
+    # sync, a short-lived connection per call rather than a pooled engine
+    # (this is called from both the FastAPI process and every Celery task's
+    # own fresh event loop/process, so there's no single long-lived pool to
+    # share anyway).
+    return create_engine(get_settings().database_url, pool_pre_ping=True)
 
 
 def load_runtime_settings() -> dict[str, Any]:
-    path = _settings_file()
-    if not path.exists():
+    engine = _sync_engine()
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT data FROM runtime_settings WHERE id = :id"), {"id": _ROW_ID}).first()
+    except Exception:  # noqa: BLE001 - a DB hiccup here must never crash a request; fall back to defaults
         return dict(DEFAULTS)
-    with _lock:
-        try:
-            data = json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError):
-            return dict(DEFAULTS)
+    finally:
+        engine.dispose()
+
     merged = dict(DEFAULTS)
-    merged.update(data)
+    if row is not None and row[0]:
+        merged.update(row[0])
     return merged
 
 
 def save_runtime_settings(updates: dict[str, Any]) -> dict[str, Any]:
     current = load_runtime_settings()
     current.update({k: v for k, v in updates.items() if v is not None})
-    path = _settings_file()
-    with _lock:
-        path.write_text(json.dumps(current, indent=2))
+
+    engine = _sync_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO runtime_settings (id, data, updated_at) VALUES (:id, CAST(:data AS JSONB), now()) "
+                    "ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()"
+                ),
+                {"id": _ROW_ID, "data": json.dumps(current)},
+            )
+    finally:
+        engine.dispose()
     return current
 
 
