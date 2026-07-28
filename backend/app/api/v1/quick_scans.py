@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -34,9 +35,22 @@ router = APIRouter()
 _DEFAULT_COMPANY_NAME = "My Products"
 
 
+_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+
+def _normalize_url(url: str) -> str:
+    """A user typing 'sonohl.com' rather than 'https://sonohl.com' is the
+    common case, not an edge case -- SSRF validation (ssrf.py) requires an
+    allowed scheme and rejects a bare hostname outright, which otherwise
+    surfaces as a bare, unhelpful 'Failed to fetch'. Defaults to https, the
+    safer and more common choice for a bare domain typed by hand."""
+    url = url.strip()
+    return url if _SCHEME_RE.match(url) else f"https://{url}"
+
+
 async def _resolve_source_text_from_url(source_url: str) -> str:
     async with httpx.AsyncClient() as client:
-        result = await safe_fetch(client, source_url)
+        result = await safe_fetch(client, _normalize_url(source_url))
     parsed = parse_html(result.content)
     return parsed.full_text
 
@@ -163,7 +177,7 @@ async def start_quick_scan(
             status=JobStatus.QUEUED,
             input_snapshot_json={
                 "source_text": source_text,
-                "source_url": source_urls[0] if source_urls else None,
+                "source_url": _normalize_url(source_urls[0]) if source_urls else None,
                 "product_name_hint": name or None,
             },
         )
@@ -267,7 +281,7 @@ async def confirm_candidate_site(
         else analysis_run.input_snapshot_json.get("product_name_hint")
     )
     analysis_run.input_snapshot_json = {
-        "source_text": source_text, "source_url": payload.url, "product_name_hint": name_hint,
+        "source_text": source_text, "source_url": _normalize_url(payload.url), "product_name_hint": name_hint,
     }
     analysis_run.status = JobStatus.QUEUED
     analysis_run.error_summary = None
