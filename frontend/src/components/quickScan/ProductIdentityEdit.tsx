@@ -29,6 +29,21 @@ export function ProductIdentityEdit({
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(forceOpen);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [correctionUrl, setCorrectionUrl] = useState("");
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["analysis", run.id] });
+    if (run.product_id) {
+      queryClient.invalidateQueries({ queryKey: ["analysis", "latest-for-product", run.product_id] });
+    }
+  };
+
+  const reset = () => {
+    setOpen(forceOpen);
+    setValues({});
+    setCorrectionUrl("");
+    onDone?.();
+  };
 
   const overrideMutation = useMutation({
     mutationFn: () =>
@@ -38,15 +53,32 @@ export function ProductIdentityEdit({
           .map(([key, value]) => ({ target: "product", key, value })),
       }),
     onSuccess: () => {
-      setOpen(forceOpen);
-      setValues({});
-      queryClient.invalidateQueries({ queryKey: ["analysis", run.id] });
-      if (run.product_id) {
-        queryClient.invalidateQueries({ queryKey: ["analysis", "latest-for-product", run.product_id] });
-      }
-      onDone?.();
+      reset();
+      invalidate();
     },
   });
+
+  // If the agent identified the wrong product entirely, plain field edits
+  // (name/manufacturer/etc.) only patch Stage 1's guess -- they don't fetch
+  // anything new. A link re-derives identity AND evidence from a page the
+  // user actually points at, straight through retrieval + synthesis again
+  // (same mechanism as confirming a web-search candidate, see
+  // quick_scans.py::confirm_candidate_site).
+  const confirmSiteMutation = useMutation({
+    mutationFn: () =>
+      api.post(`/quick-scans/${run.id}/confirm-site`, {
+        url: correctionUrl.trim(),
+        product_name: values.product_name?.trim() || undefined,
+      }),
+    onSuccess: () => {
+      reset();
+      invalidate();
+    },
+  });
+
+  const isPending = overrideMutation.isPending || confirmSiteMutation.isPending;
+  const activeError = correctionUrl.trim() ? confirmSiteMutation.error : overrideMutation.error;
+  const isError = correctionUrl.trim() ? confirmSiteMutation.isError : overrideMutation.isError;
 
   const editedKeys = new Set(
     Object.keys(run.overrides_json)
@@ -90,16 +122,36 @@ export function ProductIdentityEdit({
           </label>
         ))}
       </div>
-      {overrideMutation.isError && (
-        <p className="text-xs text-risk-critical">{(overrideMutation.error as Error).message}</p>
-      )}
+
+      <div className="pt-2 border-t border-slate-100 dark:border-slate-900">
+        <label className="text-xs space-y-1 block">
+          <span className="text-slate-500">
+            Or, if the agent got the product wrong entirely: paste a link to the right one
+          </span>
+          <input
+            type="url"
+            placeholder="https://…"
+            className="w-full rounded border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1"
+            value={correctionUrl}
+            onChange={(e) => setCorrectionUrl(e.target.value)}
+          />
+        </label>
+        <p className="text-[11px] text-slate-400 mt-1">
+          This re-fetches that page and re-runs the whole analysis from it -- more thorough than
+          the fields above, since it replaces the evidence Stage 1 read from, not just the name.
+          Any product name typed above is used as a hint alongside the page.
+        </p>
+      </div>
+
+      {isError && <p className="text-xs text-risk-critical">{(activeError as Error).message}</p>}
+
       <div className="flex items-center gap-2">
         <button
-          disabled={overrideMutation.isPending}
-          onClick={() => overrideMutation.mutate()}
+          disabled={isPending}
+          onClick={() => (correctionUrl.trim() ? confirmSiteMutation.mutate() : overrideMutation.mutate())}
           className="text-xs rounded bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 px-3 py-1.5 disabled:opacity-50"
         >
-          {overrideMutation.isPending ? "Re-running…" : "Save and re-run"}
+          {isPending ? "Re-running…" : "Save and re-run"}
         </button>
         <button
           onClick={() => {

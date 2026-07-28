@@ -239,28 +239,40 @@ async def override_quick_scan(
 async def confirm_candidate_site(
     analysis_id: uuid.UUID, payload: ConfirmSiteRequest, db: AsyncSession = Depends(get_db)
 ) -> Job:
-    """Confirms the web-search candidate proposed after a name-only
-    submission's zero-hit (pipeline.py::_find_candidate_site). Once
-    confirmed, this is functionally identical to a name+link submission --
-    the confirmed URL is fetched and run through the standard extract-then-
-    retrieve-then-synthesize flow, straight through to completion (one
-    confirmation, not two: the user already confirmed the site itself)."""
+    """Two callers, same mechanism: (a) confirms the web-search candidate
+    proposed after a name-only submission's zero-hit
+    (pipeline.py::_find_candidate_site), or (b) a link a user supplies
+    directly via ProductIdentityEdit to correct an identity they believe is
+    wrong -- for a completed run, not just an awaiting-confirmation one.
+    Either way this is functionally identical to a name+link submission --
+    the URL is fetched and run through the standard extract-then-retrieve-
+    then-synthesize flow, straight through to completion (one confirmation,
+    not two: the user already confirmed the site/link itself)."""
     analysis_run = await db.get(AnalysisRun, analysis_id)
     if analysis_run is None or analysis_run.analysis_type != "quick_scan":
         raise HTTPException(status_code=404, detail="Quick scan not found")
-    if analysis_run.status != JobStatus.AWAITING_CONFIRMATION:
-        raise HTTPException(status_code=400, detail="Can only confirm a site on an awaiting-confirmation quick scan")
+    was_complete = analysis_run.status == JobStatus.COMPLETE
+    if not was_complete and analysis_run.status != JobStatus.AWAITING_CONFIRMATION:
+        raise HTTPException(
+            status_code=400, detail="Can only confirm a site on a completed or awaiting-confirmation quick scan"
+        )
 
     source_text = await _resolve_source_text_from_url(payload.url)
     if not source_text.strip():
         raise HTTPException(status_code=400, detail="No text could be extracted from that site.")
 
-    name_hint = analysis_run.input_snapshot_json.get("product_name_hint")
+    name_hint = (
+        payload.product_name.strip()
+        if payload.product_name and payload.product_name.strip()
+        else analysis_run.input_snapshot_json.get("product_name_hint")
+    )
     analysis_run.input_snapshot_json = {
         "source_text": source_text, "source_url": payload.url, "product_name_hint": name_hint,
     }
     analysis_run.status = JobStatus.QUEUED
     analysis_run.error_summary = None
+    if was_complete:
+        analysis_run.revision += 1
     db.add(analysis_run)
     await db.flush()
 

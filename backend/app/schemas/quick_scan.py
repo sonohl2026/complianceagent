@@ -24,8 +24,14 @@ class OverrideRequest(BaseModel):
 
 
 class ConfirmSiteRequest(BaseModel):
-    """Confirms the web-search candidate site proposed on a name-only
-    submission's zero-hit (see pipeline.py::_find_candidate_site) -- the
-    confirmed URL is fetched and analyzed like any other link submission."""
+    """Confirms a candidate site -- either the one the web-search fallback
+    proposed on a name-only submission's zero-hit (see
+    pipeline.py::_find_candidate_site), or a link the user supplies directly
+    when correcting an identity they believe the agent got wrong (see
+    ProductIdentityEdit's link field). Either way the URL is fetched and
+    analyzed like any other link submission. product_name, if given,
+    overrides the stored name hint -- lets a user correct the name and
+    supply the right link in the same action."""
 
     url: str
+    product_name: str | None = None
