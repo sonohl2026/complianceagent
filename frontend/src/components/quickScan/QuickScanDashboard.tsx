@@ -102,8 +102,8 @@ export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
               <Gauge
                 value={result.scores.assessment_coverage_pct}
                 label="Coverage"
-                sublabel="of 6 pillars"
-                explanation="How many of the 6 pillars below we actually found real evidence for, not left as 'not assessed.' This is about how complete our research was -- a different thing from insurance coverage (the Coverage & reimbursement pillar further down)."
+                sublabel="of 6 areas"
+                explanation="How many of the 6 underlying evidence areas we actually found real evidence for, not left as 'not assessed' -- shown grouped into the 3 categories below (Regulatory status, Coverage & reimbursement, Clinical evidence). This is about how complete our research was, a different thing from insurance coverage specifically (the Coverage & reimbursement box below)."
               />
               <Gauge
                 value={result.scores.research_confidence}
