@@ -2,16 +2,10 @@ import { useMutation, useQuery, useQueryClient, type UseMutationResult } from "@
 import { useState } from "react";
 
 import { api } from "../api/client";
-import { MasterPromptSection } from "../components/MasterPromptSection";
 import type { AppSettings, AppSettingsUpdate } from "../types/settings";
-import { AuthorityLibrary } from "./AuthorityLibrary";
-
-const TABS = ["General", "Authority Library"] as const;
-type Tab = (typeof TABS)[number];
 
 export function Settings() {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<Tab>("General");
   const { data, isLoading } = useQuery({
     queryKey: ["settings"],
     queryFn: () => api.get<AppSettings>("/settings"),
@@ -42,27 +36,6 @@ export function Settings() {
           Save failed: {(mutation.error as Error).message}. Nothing below was changed -- try again.
         </div>
       )}
-
-      <div className="flex gap-1 border-b border-slate-200 dark:border-slate-800">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-3 py-1.5 text-sm -mb-px border-b-2 ${
-              tab === t
-                ? "border-slate-900 dark:border-slate-100 font-medium"
-                : "border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
-            }`}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
-
-      {tab === "Authority Library" && <AuthorityLibrary />}
-
-      {tab === "General" && (
-        <>
 
       <div className="rounded border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950 p-4 text-sm">
         {data.local_data_notice}
@@ -269,10 +242,6 @@ export function Settings() {
           shows code number + short paraphrase + official-lookup link only)
         </label>
       </section>
-
-          <MasterPromptSection />
-        </>
-      )}
     </div>
   );
 }
