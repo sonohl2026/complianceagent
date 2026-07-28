@@ -19,10 +19,12 @@ export function Gauge({
   value,
   label,
   sublabel,
+  explanation,
 }: {
   value: number | null;
   label: string;
   sublabel?: string;
+  explanation?: string;
 }) {
   const size = 96;
   const stroke = 9;
@@ -36,8 +38,16 @@ export function Gauge({
   const filled = isNotScored ? 0 : (Math.max(0, Math.min(100, value)) / 100) * arcLength;
 
   return (
-    <div className="flex flex-col items-center gap-1">
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="rotate-[135deg]">
+    <div className="group relative flex flex-col items-center gap-1">
+      {explanation && (
+        <div
+          role="tooltip"
+          className="pointer-events-none absolute bottom-full left-1/2 mb-2 w-48 -translate-x-1/2 rounded bg-slate-900 p-2 text-center text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 dark:bg-slate-100 dark:text-slate-900 z-10"
+        >
+          {explanation}
+        </div>
+      )}
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="rotate-[135deg] cursor-help">
         {isNotScored ? (
           <circle
             cx={size / 2}
@@ -76,13 +86,13 @@ export function Gauge({
           </>
         )}
       </svg>
-      <div className="-mt-16 flex h-24 w-24 flex-col items-center justify-center">
+      <div className="-mt-16 flex h-24 w-24 flex-col items-center justify-center cursor-help">
         <span className={`text-2xl font-semibold tabular-nums ${isNotScored ? "text-slate-400" : ""}`}>
           {isNotScored ? "?" : Math.round(value as number)}
         </span>
         {sublabel && <span className="text-[10px] text-slate-500">{sublabel}</span>}
       </div>
-      <span className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-500">{label}</span>
+      <span className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-500 cursor-help">{label}</span>
     </div>
   );
 }

@@ -97,9 +97,19 @@ export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
                 value={result.scores.maturity_state === "SCORED" ? result.scores.maturity : null}
                 label="Maturity"
                 sublabel={result.scores.maturity_state === "NOT_SCORED" ? "NOT SCORED" : undefined}
+                explanation="Overall reimbursement readiness, 0-100 -- how far along this product is on FDA status, coding, coverage, payment, and billing, combined. Shows a '?' instead of a low number when there isn't enough evidence yet to score it at all, which is not the same as scoring badly."
               />
-              <Gauge value={result.scores.assessment_coverage_pct} label="Coverage" sublabel="of 6 pillars" />
-              <Gauge value={result.scores.research_confidence} label="Confidence" />
+              <Gauge
+                value={result.scores.assessment_coverage_pct}
+                label="Coverage"
+                sublabel="of 6 pillars"
+                explanation="How many of the 6 pillars below we actually found real evidence for, not left as 'not assessed.' This is about how complete our research was -- a different thing from insurance coverage (the Coverage & reimbursement pillar further down)."
+              />
+              <Gauge
+                value={result.scores.research_confidence}
+                label="Confidence"
+                explanation="How much we trust the evidence we found -- based on how complete and consistent it was, not on whether the news is good or bad for the product."
+              />
             </div>
             {result.scores.maturity_state === "NOT_SCORED" && (
               <p className="mt-3 text-center text-sm text-amber-700 dark:text-amber-400">
