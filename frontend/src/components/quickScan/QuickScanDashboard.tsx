@@ -1,14 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
-
-import { api } from "../../api/client";
 import { RiskBadge } from "../VerdictBadge";
 import { StatusBadge } from "../StatusBadge";
 import type { AnalysisRun, QuickScanAssessment } from "../../types/analysis";
-import type { AppSettings } from "../../types/settings";
 import { formatAnalysisStage } from "../../utils/analysisStages";
 import { BillingCodesSection } from "./BillingCodesSection";
 import { Gauge } from "./Gauge";
-import { PILLAR_ORDER, PillarCard } from "./PillarCard";
+import { PILLAR_GROUPS, PillarGroupCard } from "./PillarCard";
 import { ProductIdentityEdit } from "./ProductIdentityEdit";
 import { QuickScanExport } from "./QuickScanExport";
 import { RetrievalProgressFeed } from "./RetrievalProgressFeed";
@@ -17,13 +13,19 @@ function asResult(value: AnalysisRun["quick_scan_result_json"]): QuickScanAssess
   return Object.keys(value).length > 0 ? (value as QuickScanAssessment) : null;
 }
 
+interface Stage1Summary {
+  intended_use?: string;
+  technology_type?: string;
+}
+
+function getStage1Summary(run: AnalysisRun): Stage1Summary {
+  return (run.retrieval_bundle_json.stage1 as Stage1Summary | undefined) ?? {};
+}
+
 export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
   const isRunning = run.status === "QUEUED" || run.status === "RUNNING";
   const result = asResult(run.quick_scan_result_json);
-  // Same query key Settings.tsx uses -- shares its cache rather than
-  // double-fetching. Only read here to gate the coding pillar's CPT-license
-  // note (spec §5); never used to change what the pipeline itself does.
-  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => api.get<AppSettings>("/settings") });
+  const stage1 = getStage1Summary(run);
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -35,7 +37,7 @@ export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
             API -- revision {run.revision}
           </p>
         </div>
-        {result && <QuickScanExport result={result} analysisId={run.id} />}
+        {result && <QuickScanExport result={result} run={run} />}
       </div>
 
       {isRunning && (
@@ -110,13 +112,32 @@ export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
             </p>
           </div>
 
+          {/* Confirms the agent understood the product before showing
+              anything derived from that understanding -- directly requested:
+              a plain-language read-back of what this device is/does. */}
+          {(stage1.technology_type || stage1.intended_use) && (
+            <section className="rounded border border-slate-200 dark:border-slate-800 p-4 space-y-1">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                What we understood this product to be
+              </h3>
+              {stage1.technology_type && (
+                <p className="text-sm text-slate-700 dark:text-slate-200">{stage1.technology_type}</p>
+              )}
+              {stage1.intended_use && (
+                <p className="text-sm text-slate-600 dark:text-slate-300">
+                  <span className="text-slate-500">Intended use: </span>
+                  {stage1.intended_use}
+                </p>
+              )}
+              <p className="text-xs text-slate-400 pt-1">
+                Not what it is -- correct it above if this is wrong before trusting anything below.
+              </p>
+            </section>
+          )}
+
           {/* Billing codes: the second deliverable, promoted to first-class
               rather than buried in the coding pillar's expander. */}
-          <BillingCodesSection
-            run={run}
-            codingPillar={result.pillars.find((p) => p.pillar === "coding")}
-            cptLicenseEnabled={settings?.cpt_license ?? false}
-          />
+          <BillingCodesSection run={run} codingPillar={result.pillars.find((p) => p.pillar === "coding")} />
 
           {/* Gaps blocking coverage: the third deliverable, above the fold. */}
           {(result.top_gaps.length > 0 || result.next_steps.length > 0) && (
@@ -146,16 +167,16 @@ export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
             </section>
           )}
 
-          {/* Pillar detail: a compact secondary strip, not the headline. */}
+          {/* Pillar detail: three plain-language groups instead of six raw
+              pillars -- Coding is folded into Billing Codes above (same
+              data, not a second card repeating it); Coverage/Payment/
+              Billing workflow merge into one "will this get paid" card. */}
           <section className="space-y-3">
             <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Pillar detail</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-              {PILLAR_ORDER.map(({ key }) => {
-                const pillar = result.pillars.find((p) => p.pillar === key);
-                return pillar ? (
-                  <PillarCard key={key} pillar={pillar} cptLicenseEnabled={settings?.cpt_license ?? false} />
-                ) : null;
-              })}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-2">
+              {PILLAR_GROUPS.map((group) => (
+                <PillarGroupCard key={group.id} group={group} pillars={result.pillars} />
+              ))}
             </div>
           </section>
 
