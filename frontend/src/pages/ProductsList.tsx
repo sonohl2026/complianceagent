@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import { RiskBadge } from "../components/VerdictBadge";
 import { StatusBadge } from "../components/StatusBadge";
 import { Composer } from "../components/quickScan/Composer";
+import { RenameProductControl } from "../components/quickScan/RenameProductControl";
 import type { Job } from "../types/document";
 import type { ProductSummary } from "../types/product";
 
@@ -15,6 +16,7 @@ export function ProductsList() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
 
   const { data: products, isLoading } = useQuery({
     queryKey: ["products"],
@@ -72,9 +74,18 @@ export function ProductsList() {
             {products.map((p) => (
               <tr key={p.id} className="border-b border-slate-100 dark:border-slate-900">
                 <td className="py-2 pr-4">
-                  <Link to={`/products/${p.id}`} className="font-medium hover:underline">
-                    {p.name}
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    {renamingId !== p.id && (
+                      <Link to={`/products/${p.id}`} className="font-medium hover:underline">
+                        {p.name}
+                      </Link>
+                    )}
+                    <RenameProductControl
+                      productId={p.id}
+                      currentName={p.name}
+                      onEditingChange={(editing) => setRenamingId(editing ? p.id : null)}
+                    />
+                  </div>
                 </td>
                 <td className="py-2 pr-4">
                   {p.latest_run_status ? <StatusBadge status={p.latest_run_status} /> : "—"}

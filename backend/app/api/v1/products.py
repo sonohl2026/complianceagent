@@ -8,7 +8,7 @@ from app.database import get_db
 from app.models.analysis import AnalysisRun
 from app.models.product import Product
 from app.schemas.analysis import AnalysisRunRead
-from app.schemas.product import ProductRead
+from app.schemas.product import ProductRead, ProductRename
 from app.schemas.product_summary import ProductSummary
 
 router = APIRouter()
@@ -55,6 +55,27 @@ async def get_product(product_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     product = await db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
+    return product
+
+
+@router.patch("/products/{product_id}", response_model=ProductRead)
+async def rename_product(
+    product_id: uuid.UUID, payload: ProductRename, db: AsyncSession = Depends(get_db)
+) -> Product:
+    """A user-requested rename is sticky: sets name_manually_set so
+    _sync_product_name_from_result (quick_scan_tasks.py) skips this product
+    on future completions instead of silently overwriting the rename with
+    whatever Stage 3 next resolves."""
+    product = await db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Name can't be empty")
+    product.name = name
+    product.name_manually_set = True
+    await db.commit()
+    await db.refresh(product)
     return product
 
 

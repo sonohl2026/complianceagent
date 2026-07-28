@@ -1,12 +1,14 @@
 import { RiskBadge } from "../VerdictBadge";
 import { StatusBadge } from "../StatusBadge";
 import type { AnalysisRun, QuickScanAssessment } from "../../types/analysis";
+import type { Product } from "../../types/product";
 import { formatAnalysisStage } from "../../utils/analysisStages";
 import { BillingCodesSection } from "./BillingCodesSection";
 import { Gauge } from "./Gauge";
 import { PILLAR_GROUPS, PillarGroupCard } from "./PillarCard";
 import { ProductIdentityEdit } from "./ProductIdentityEdit";
 import { QuickScanExport } from "./QuickScanExport";
+import { RenameProductControl } from "./RenameProductControl";
 import { RetrievalProgressFeed } from "./RetrievalProgressFeed";
 
 function asResult(value: AnalysisRun["quick_scan_result_json"]): QuickScanAssessment | null {
@@ -22,7 +24,7 @@ function getStage1Summary(run: AnalysisRun): Stage1Summary {
   return (run.retrieval_bundle_json.stage1 as Stage1Summary | undefined) ?? {};
 }
 
-export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
+export function QuickScanDashboard({ run, product }: { run: AnalysisRun; product?: Product }) {
   const isRunning = run.status === "QUEUED" || run.status === "RUNNING";
   const result = asResult(run.quick_scan_result_json);
   const stage1 = getStage1Summary(run);
@@ -61,7 +63,13 @@ export function QuickScanDashboard({ run }: { run: AnalysisRun }) {
         <>
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="space-y-1">
-              <p className="text-xl font-semibold">{result.product.name}</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-xl font-semibold">{product?.name ?? result.product.name}</p>
+                {product && <RenameProductControl productId={product.id} currentName={product.name} size="lg" />}
+              </div>
+              {product && product.name !== result.product.name && (
+                <p className="text-xs text-slate-400">Agent identified this as: {result.product.name}</p>
+              )}
               <p className="text-sm text-slate-500">{result.product.manufacturer || "Manufacturer unknown"}</p>
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 <span className="text-xs rounded bg-slate-200 dark:bg-slate-800 px-2 py-0.5 uppercase tracking-wide">

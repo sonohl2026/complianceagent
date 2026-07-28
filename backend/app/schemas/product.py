@@ -27,12 +27,17 @@ class ProductUpdate(ProductCreate):
     name: str | None = None  # type: ignore[assignment]
 
 
+class ProductRename(BaseModel):
+    name: str
+
+
 class ProductRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     company_id: uuid.UUID
     name: str
+    name_manually_set: bool
     description: str | None
     product_type: str | None
     regulatory_stage: str | None

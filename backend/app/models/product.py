@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import Boolean, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +15,11 @@ class Product(UUIDPKMixin, TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Set once a user renames this product (see api/v1/products.py::rename_product).
+    # Makes the rename sticky -- quick_scan_tasks.py::_sync_product_name_from_result
+    # skips products with this set, rather than overwriting a deliberate rename
+    # with whatever Stage 3 resolves on the next scan.
+    name_manually_set: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     product_type: Mapped[str | None] = mapped_column(String(255))
     regulatory_stage: Mapped[str | None] = mapped_column(String(64))

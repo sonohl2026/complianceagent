@@ -164,14 +164,16 @@ async def _sync_product_name_from_result(db: AsyncSession, analysis_run: Analysi
     it needs a real name per product, but a material-only submission (no
     typed name) doesn't know one until Stage 1 resolves it. Keeps the
     Product row's name in step with whatever identity Stage 3 actually
-    settled on, every time a run completes."""
+    settled on, every time a run completes -- unless the user has manually
+    renamed it (products.py::rename_product sets name_manually_set), in
+    which case that rename is a deliberate choice this must not undo."""
     if analysis_run.product_id is None:
         return
     resolved_name = (analysis_run.quick_scan_result_json.get("product") or {}).get("name")
     if not resolved_name:
         return
     product = await db.get(Product, analysis_run.product_id)
-    if product is not None:
+    if product is not None and not product.name_manually_set:
         product.name = resolved_name
 
 

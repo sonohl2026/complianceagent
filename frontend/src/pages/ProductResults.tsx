@@ -79,7 +79,7 @@ export function ProductResults() {
 
       {run && run.status === "AWAITING_CONFIRMATION" && <ConfirmationPanel run={run} />}
 
-      {run && run.status !== "AWAITING_CONFIRMATION" && <QuickScanDashboard run={run} />}
+      {run && run.status !== "AWAITING_CONFIRMATION" && <QuickScanDashboard run={run} product={product} />}
     </div>
   );
 }
