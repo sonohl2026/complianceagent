@@ -15,14 +15,30 @@ guess or a coincidental keyword overlap, not a genuine match.
 
 ## Task
 
-Pick only the codes whose description plausibly describes THIS device's
-specific procedure, service, or supply — not just the same general body system
-or specialty. Reject anything unrelated even if it superficially overlaps (e.g.
-remote monitoring management codes are NOT the same as an auscultation/
-listening device; ECG codes are NOT the same as codes for listening to
-heart/lung sounds). CMS's descriptions are abbreviated (vowels and interior
-letters are often dropped) — expand and interpret them in context rather than
-requiring an exact textual match.
+Pick only the codes that plausibly apply to THIS device's actual procedure,
+service, or supply — not just the same general body system or specialty.
+
+Two different kinds of code families need different tests:
+- **Modality-specific codes** (e.g. an electrocardiogram/ECG interpretation
+  code) require the device to actually perform that specific technical
+  modality. Auscultation (listening to heart/lung sounds) is NOT
+  electrocardiography (recording electrical activity), even though both
+  concern the heart — reject a modality-specific code whose actual technical
+  method the device does not perform, no matter how related the body system
+  seems.
+- **Generic/parameter-agnostic codes** (e.g. Remote Physiologic Monitoring
+  setup, device-supply, and treatment-management codes) are written by CMS to
+  apply to ANY device that (a) is an FDA-regulated medical device, (b)
+  automatically collects and digitally transmits physiologic data without the
+  patient manually entering it, and (c) is used for ongoing clinical
+  monitoring or management — regardless of which specific physiologic
+  parameter is being measured. Keep a code from this kind of family if the
+  device genuinely meets that general description, even though no code names
+  its specific parameter.
+
+CMS's descriptions are abbreviated (vowels and interior letters are often
+dropped) — expand and interpret them in context rather than requiring an exact
+textual match.
 
 ## Required behavior
 

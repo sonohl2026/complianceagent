@@ -292,3 +292,28 @@ async def test_resolve_fee_schedule_evidence_misses_when_gate_rejects_all_candid
     evidence = await resolve_fee_schedule_evidence(llm, "fake-model", stage1, bundle, table=_TEST_TABLE)
     assert evidence.status == RetrievalStatus.MISS
     assert evidence.data is None
+
+
+async def test_resolve_fee_schedule_evidence_always_considers_known_generic_family():
+    # RPM's fixed, generic code family must reach the candidate pool even
+    # when the LLM memory-guess and description-prefilter steps propose
+    # nothing at all -- confirmed empirically that neither reliably
+    # surfaces it (see code_candidates.py's own comment on this constant).
+    from app.services.quick_scan.code_candidates import _KNOWN_GENERIC_CANDIDATE_FAMILIES
+
+    entries = {
+        code: FeeScheduleEntry(code=code, code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=50.0, status_code="A", description=None)
+        for code in _KNOWN_GENERIC_CANDIDATE_FAMILIES
+    }
+    await cache.store_table(_TEST_TABLE, entries)
+
+    stage1 = _stage1(
+        technology_type="remote physiologic monitoring wearable",
+        intended_use="Digitally transmits patient physiologic data for ongoing clinical monitoring.",
+    )
+    bundle = EvidenceBundle(sources={}, all_openfda_failed=False, all_cms_failed=False)
+    # Nothing proposed by either the memory-guess or description-match path.
+    llm = _FakeCandidateLLM([], refinement_codes=[], gate_codes=list(_KNOWN_GENERIC_CANDIDATE_FAMILIES))
+    evidence = await resolve_fee_schedule_evidence(llm, "fake-model", stage1, bundle, table=_TEST_TABLE)
+    assert evidence.status == RetrievalStatus.HIT
+    assert {c["code"] for c in evidence.data["verified_codes"]} == set(_KNOWN_GENERIC_CANDIDATE_FAMILIES)

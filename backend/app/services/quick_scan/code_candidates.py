@@ -41,6 +41,27 @@ from app.services.quick_scan.stage1_extraction import UsageCallback, wrap_untrus
 
 _MAX_OUTPUT_TOKENS = 1500  # a longer candidate list (each ~6-char code) can exceed a Stage-1-sized budget
 
+# Remote Physiologic Monitoring (RPM) is a small, fixed, CMS-defined code
+# family that is deliberately parameter-agnostic -- it applies to any
+# FDA-regulated device that digitally transmits physiologic data for
+# ongoing clinical monitoring/management, regardless of which specific
+# parameter is measured (see quick_scan_code_relevance_gate.md's own
+# reasoning about this). Neither the LLM memory-guess step nor the
+# mechanical description-index prefilter reliably surfaces this family:
+# confirmed empirically against a real auscultation-device query, the
+# prefilter ranked 99453/99445/99454 at #695+ and 99457/99458/99470 at
+# #3926+ out of 5,444 codes with at least one coincidental keyword
+# overlap (short abbreviated tokens like "mntr" collide with thousands of
+# unrelated codes), and the memory-guess step recalled some of these codes
+# but not others with no consistent pattern. So this family is included
+# directly as an always-considered candidate set, subject to the exact
+# same real-data verification and relevance gate as every other candidate
+# -- this does not assume RPM applies to any given device; the gate still
+# judges it per device, same as everything else.
+_KNOWN_GENERIC_CANDIDATE_FAMILIES: tuple[str, ...] = (
+    "99453", "99445", "99454", "99457", "99458", "99470", "99091",
+)
+
 
 def extract_code_mentions(text: str) -> list[str]:
     """Scans real, already-retrieved CMS document text for CPT/HCPCS-shaped
@@ -205,7 +226,10 @@ async def resolve_fee_schedule_evidence(
     sourced_hints = _sourced_hints_from_bundle(bundle)
     llm_candidates = await propose_llm_candidates(llm, model, stage1, sourced_hints, on_usage=on_usage)
     description_matches = await _description_matched_candidates(llm, model, stage1, table, on_usage=on_usage)
-    verified = await verify_candidates(sourced_hints + llm_candidates + description_matches, table=table)
+    all_candidates = (
+        sourced_hints + llm_candidates + description_matches + list(_KNOWN_GENERIC_CANDIDATE_FAMILIES)
+    )
+    verified = await verify_candidates(all_candidates, table=table)
     verified = await gate_candidates_by_relevance(llm, model, stage1, verified, table=table, on_usage=on_usage)
 
     if not verified:
