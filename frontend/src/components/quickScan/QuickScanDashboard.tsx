@@ -111,7 +111,7 @@ export function QuickScanDashboard({ run, product }: { run: AnalysisRun; product
                 value={result.scores.assessment_coverage_pct}
                 label="Coverage"
                 sublabel="of 6 areas"
-                explanation="How many of the 6 underlying evidence areas we actually found real evidence for, not left as 'not assessed' -- shown grouped into the 3 categories below (Regulatory status, Coverage & reimbursement, Clinical evidence). This is about how complete our research was, a different thing from insurance coverage specifically (the Coverage & reimbursement box below)."
+                explanation="How many of the 6 evidence areas we found real information for, not left as 'not assessed'. 5 show in the categories below; Coding (the 6th) shows in Billing Codes above. This is about how complete our research was, not insurance coverage itself."
               />
               <Gauge
                 value={result.scores.research_confidence}
