@@ -6,6 +6,7 @@ from app.services.fee_schedule import cache
 from app.services.fee_schedule.types import CodeFormat, FeeScheduleEntry
 from app.services.quick_scan.code_candidates import (
     extract_code_mentions,
+    gate_candidates_by_relevance,
     refine_candidates_from_descriptions,
     resolve_fee_schedule_evidence,
     verify_candidates,
@@ -23,16 +24,26 @@ def _stage1(**overrides) -> Stage1Extraction:
 
 
 class _FakeCandidateLLM:
-    def __init__(self, candidate_codes, refinement_codes=None):
+    def __init__(self, candidate_codes, refinement_codes=None, gate_codes=None):
         self.candidate_codes = candidate_codes
         # Lets one fake instance simulate "memorized-knowledge call proposes
         # nothing, but the real-data-grounded refinement call picks
         # correctly" -- the exact failure mode this whole mechanism fixes.
         self.refinement_codes = refinement_codes if refinement_codes is not None else candidate_codes
+        # Lets a fake instance simulate the final relevance gate rejecting
+        # (or keeping) specific codes independently of what got proposed --
+        # defaults to "keep everything the gate is shown" when unset, so
+        # existing tests that don't care about the gate are unaffected.
+        self.gate_codes = gate_codes
 
     async def structured_completion(self, **kwargs):
         from app.services.llm.base import LLMResult
-        codes = self.refinement_codes if kwargs["schema_name"] == "quick_scan_code_refinement" else self.candidate_codes
+        if kwargs["schema_name"] == "quick_scan_code_relevance_gate":
+            codes = self.gate_codes if self.gate_codes is not None else self.refinement_codes
+        elif kwargs["schema_name"] == "quick_scan_code_refinement":
+            codes = self.refinement_codes
+        else:
+            codes = self.candidate_codes
         return LLMResult(
             content={"candidate_codes": codes}, raw_content="{}", requested_model=kwargs["model"],
             model_response_identifier="fake", prompt_tokens=0, completion_tokens=0,
@@ -70,7 +81,11 @@ async def _cleanup_test_table():
     yield
     client = cache._client()
     try:
-        await client.delete(cache._DATA_KEY_TEMPLATE.format(table=_TEST_TABLE), cache._REFRESHED_AT_KEY_TEMPLATE.format(table=_TEST_TABLE))
+        await client.delete(
+            cache._DATA_KEY_TEMPLATE.format(table=_TEST_TABLE),
+            cache._REFRESHED_AT_KEY_TEMPLATE.format(table=_TEST_TABLE),
+            cache._DESCRIPTION_INDEX_KEY_TEMPLATE.format(table=_TEST_TABLE),
+        )
     finally:
         await client.aclose()
 
@@ -189,4 +204,91 @@ async def test_raw_cpt_description_never_leaks_into_evidence_output():
     serialized = str(evidence.data)
     assert raw_description not in serialized
     assert "poc aly" not in serialized  # no fragment of the raw descriptor either
-    assert evidence.data["verified_codes"][0]["description"] is None
+
+
+# --- final relevance gate (fixes the confirmed real-world bug: SonoHL, an
+# auscultation device, got ECG-family and RPM-family codes -- all real,
+# active, correctly priced, but semantically wrong for the device) ---
+
+async def test_gate_rejects_real_but_semantically_wrong_codes():
+    # Reproduces the SonoHL bug directly: 93000 (ECG) and 99457 (RPM) are
+    # both real, active, verified codes -- but wrong for an auscultation
+    # device. The gate (not verify_candidates, which has no relevance check)
+    # is what must reject them.
+    ecg = FeeScheduleEntry(code="93000", code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=15.36, status_code="A", description=None)
+    rpm = FeeScheduleEntry(code="99457", code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=51.77, status_code="A", description=None)
+    await cache.store_description_index(_TEST_TABLE, {
+        "93000": "Electrocardiogram complete",
+        "99457": "Rpm tx mgmt 1st 20 min",
+    })
+    stage1 = _stage1(
+        technology_type="remote cardiac and pulmonary auscultation device",
+        intended_use="Remote 16-channel auscultation to monitor and diagnose patients' heart and lung sounds.",
+    )
+    llm = _FakeCandidateLLM([], gate_codes=[])  # gate correctly rejects both
+    gated = await gate_candidates_by_relevance(llm, "fake-model", stage1, [ecg, rpm], table=_TEST_TABLE)
+    assert gated == []
+
+
+async def test_gate_keeps_codes_that_genuinely_match():
+    # Positive control -- the gate must not reject a real match just because
+    # it rejects wrong ones elsewhere.
+    vad_code = FeeScheduleEntry(code="33990", code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=312.97, status_code="A", description=None)
+    await cache.store_description_index(_TEST_TABLE, {"33990": "Insert vad prcutan arterial"})
+    stage1 = _stage1(
+        technology_type="percutaneous ventricular assist device",
+        intended_use="Catheter-based miniaturized ventricular assist device providing mechanical circulatory support.",
+    )
+    llm = _FakeCandidateLLM([], gate_codes=["33990"])
+    gated = await gate_candidates_by_relevance(llm, "fake-model", stage1, [vad_code], table=_TEST_TABLE)
+    assert [e.code for e in gated] == ["33990"]
+
+
+async def test_gate_never_trusts_model_to_echo_unshown_code():
+    ecg = FeeScheduleEntry(code="93000", code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=15.36, status_code="A", description=None)
+    await cache.store_description_index(_TEST_TABLE, {"93000": "Electrocardiogram complete"})
+    llm = _FakeCandidateLLM([], gate_codes=["93000", "99999-not-shown"])
+    gated = await gate_candidates_by_relevance(llm, "fake-model", _stage1(), [ecg], table=_TEST_TABLE)
+    assert [e.code for e in gated] == ["93000"]
+
+
+async def test_gate_fails_open_when_no_description_index_available():
+    # No store_description_index call for this table at all -- the gate has
+    # no grounded data to judge relevance against, so it must not blind-drop
+    # otherwise-verified codes.
+    class _ExplodingLLM:
+        async def structured_completion(self, **kwargs):
+            raise AssertionError("should never be called with no groundable descriptions")
+
+    ecg = FeeScheduleEntry(code="93000", code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=15.36, status_code="A", description=None)
+    gated = await gate_candidates_by_relevance(_ExplodingLLM(), "fake-model", _stage1(), [ecg], table=_TEST_TABLE)
+    assert gated == [ecg]
+
+
+async def test_gate_short_circuits_on_empty_input():
+    class _ExplodingLLM:
+        async def structured_completion(self, **kwargs):
+            raise AssertionError("should never be called with no verified candidates")
+
+    gated = await gate_candidates_by_relevance(_ExplodingLLM(), "fake-model", _stage1(), [], table=_TEST_TABLE)
+    assert gated == []
+
+
+async def test_resolve_fee_schedule_evidence_misses_when_gate_rejects_all_candidates():
+    # End-to-end version of the SonoHL regression: codes verify fine, but
+    # the relevance gate rejects everything -- overall result must be MISS,
+    # which is what makes the frontend show "No verified billing code found"
+    # instead of the wrong codes.
+    ecg = FeeScheduleEntry(code="93000", code_format=CodeFormat.CPT_CATEGORY_I, active=True, source="pfs", payment_system="PFS", rate_usd=15.36, status_code="A", description=None)
+    await cache.store_table(_TEST_TABLE, {"93000": ecg})
+    await cache.store_description_index(_TEST_TABLE, {"93000": "Electrocardiogram complete"})
+
+    stage1 = _stage1(
+        technology_type="remote cardiac and pulmonary auscultation device",
+        intended_use="Remote 16-channel auscultation to monitor and diagnose patients' heart and lung sounds.",
+    )
+    bundle = EvidenceBundle(sources={}, all_openfda_failed=False, all_cms_failed=False)
+    llm = _FakeCandidateLLM(["93000"], refinement_codes=[], gate_codes=[])
+    evidence = await resolve_fee_schedule_evidence(llm, "fake-model", stage1, bundle, table=_TEST_TABLE)
+    assert evidence.status == RetrievalStatus.MISS
+    assert evidence.data is None

@@ -132,6 +132,47 @@ async def verify_candidates(candidates: list[str], table: str = "pfs") -> list[F
     return verified
 
 
+async def gate_candidates_by_relevance(
+    llm: LLMProvider, model: str, stage1: Stage1Extraction,
+    verified: list[FeeScheduleEntry], table: str = "pfs",
+    on_usage: UsageCallback | None = None,
+) -> list[FeeScheduleEntry]:
+    """Being a real, active, priced code doesn't mean it's the RIGHT code for
+    this device -- a candidate can reach here via a memory-guess free-
+    association or a coincidental keyword collision (both observed in
+    production: ECG codes proposed for an auscultation device, RPM codes
+    matched via 'min'/'monitor' vowel-stripped substring overlap in
+    description_search.py). Reuses the same internal raw-description index
+    and recognition-not-recall pattern already proven in
+    refine_candidates_from_descriptions -- NOT a second recall-from-memory
+    check, which is the exact failure mode this closes."""
+    if not verified:
+        return verified
+    description_index = await cache.get_description_index(table)
+    groundable = {e.code: description_index[e.code] for e in verified if e.code in description_index}
+    if not groundable:
+        return verified  # no grounded data available at all for this table -- fail open rather than blind-drop
+
+    module_prompt = load_module_prompt("quick_scan_code_relevance_gate")
+    candidates_text = "\n".join(f"{code}: {desc}" for code, desc in groundable.items())
+    user_message = wrap_untrusted_data(
+        f"technology_type: {stage1.technology_type}\nintended_use: {stage1.intended_use}\n\n"
+        f"Candidate codes (already confirmed real/active/priced -- your job is relevance only):\n{candidates_text}"
+    )
+    schema = CandidateCodesResponse.model_json_schema()
+    result = await llm.structured_completion(
+        system_prompt=module_prompt, messages=[{"role": "user", "content": user_message}],
+        schema=schema, schema_name="quick_scan_code_relevance_gate", model=model,
+        temperature=0, max_tokens=_MAX_OUTPUT_TOKENS,
+    )
+    if on_usage is not None:
+        await on_usage("fee_schedule_relevance_gate", result)
+    picked = set(CandidateCodesResponse.model_validate(result.content).candidate_codes) & set(groundable)
+    # Codes without a groundable description skip the gate entirely (no data
+    # to judge relevance against) -- kept, same fail-open reasoning as above.
+    return [e for e in verified if e.code in picked or e.code not in groundable]
+
+
 def _entry_to_evidence_dict(entry: FeeScheduleEntry) -> dict:
     return {
         "code": entry.code, "code_format": entry.code_format.value, "payment_system": entry.payment_system,
@@ -165,6 +206,7 @@ async def resolve_fee_schedule_evidence(
     llm_candidates = await propose_llm_candidates(llm, model, stage1, sourced_hints, on_usage=on_usage)
     description_matches = await _description_matched_candidates(llm, model, stage1, table, on_usage=on_usage)
     verified = await verify_candidates(sourced_hints + llm_candidates + description_matches, table=table)
+    verified = await gate_candidates_by_relevance(llm, model, stage1, verified, table=table, on_usage=on_usage)
 
     if not verified:
         return SourceEvidence(source="fee_schedule_lookup", status=RetrievalStatus.MISS, latency_ms=0)

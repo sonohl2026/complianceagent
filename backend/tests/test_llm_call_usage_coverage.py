@@ -75,9 +75,9 @@ class _CountingLLM:
                 "intended_use": "AI diagnostic software for retinal analysis", "technology_type": "AI diagnostic software",
                 "dev_stage_guess": "commercial", "candidate_search_terms": ["retinal analysis"],
             }
-        elif schema_name in ("quick_scan_code_candidates", "quick_scan_code_refinement"):
-            # Both fee-schedule calls return a real, verifiable code so
-            # neither short-circuits before making its call.
+        elif schema_name in ("quick_scan_code_candidates", "quick_scan_code_refinement", "quick_scan_code_relevance_gate"):
+            # All three fee-schedule calls return a real, verifiable code so
+            # none short-circuits before making its call.
             content = {"candidate_codes": ["92229"]}
         elif schema_name == "quick_scan_stage3":
             content = _VALID_STAGE3_ASSESSMENT
@@ -129,10 +129,11 @@ async def test_every_llm_call_across_the_pipeline_reports_usage():
     # an on_usage call. A future call added anywhere in these three modules
     # without wiring on_usage breaks this equality.
     assert usage.call_count == llm.call_count
-    # Not just equal by coincidence -- confirm all 4 expected call sites
-    # actually fired (stage1, both fee-schedule calls, stage3), so this test
-    # can't silently pass by both counts being 0 or 1.
-    assert llm.call_count == 4
+    # Not just equal by coincidence -- confirm all 5 expected call sites
+    # actually fired (stage1, all three fee-schedule calls, stage3), so this
+    # test can't silently pass by both counts being 0 or 1.
+    assert llm.call_count == 5
     assert usage.stage_names == [
-        "stage1_extraction", "fee_schedule_llm_candidates", "fee_schedule_code_refinement", "stage3_synthesis",
+        "stage1_extraction", "fee_schedule_llm_candidates", "fee_schedule_code_refinement",
+        "fee_schedule_relevance_gate", "stage3_synthesis",
     ]
