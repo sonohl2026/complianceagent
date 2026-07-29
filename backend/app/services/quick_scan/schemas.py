@@ -41,6 +41,29 @@ class CandidateCodesResponse(BaseModel):
     candidate_codes: list[str] = Field(description="Plausible CPT/HCPCS codes for this device's procedure/supply category, or [] if none plausible")
 
 
+class SourceGroup(BaseModel):
+    """One distinct real-world product identified among the attached
+    sources, and which source(s) (by index) support it -- see
+    app/services/quick_scan/source_divergence.py."""
+
+    model_config = _STRICT
+    product_name: str
+    manufacturer: str = Field(description="'' if not stated or not determinable")
+    source_indices: list[int] = Field(description="Indices (0-based) of the attached sources that describe this product")
+
+
+class SourceDivergenceCheck(BaseModel):
+    """Output of the multi-source divergence check, run only when 2+ sources
+    are attached in one submission. diverges=false means exactly one group
+    covering every source index (the common, correct case -- multiple
+    documents about the same product); diverges=true means 2+ groups, and
+    the user must pick which one to actually analyze."""
+
+    model_config = _STRICT
+    diverges: bool
+    groups: list[SourceGroup]
+
+
 class Identifier(BaseModel):
     model_config = _STRICT
     type: str = Field(description="510k | pma | denovo | product_code | udi | ncd | lcd | cpt | hcpcs")

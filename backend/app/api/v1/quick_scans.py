@@ -15,18 +15,20 @@ from app.models.enums import JobStatus
 from app.models.job import Job
 from app.models.product import Product
 from app.schemas.job import JobRead
-from app.schemas.quick_scan import ConfirmSiteRequest, OverrideRequest
+from app.schemas.quick_scan import ConfirmSiteRequest, OverrideRequest, ResolveSourceConflictRequest
 from app.services.crawling.fetch import safe_fetch
 from app.services.jobs.enqueue import enqueue_job
 from app.services.llm.cost_estimate import preflight_credit_check
 from app.services.parsing.dispatch import SUPPORTED_EXTENSIONS, parse_document
 from app.services.parsing.base import ParsingError
 from app.services.parsing.parsers.html_parser import parse_html
+from app.services.quick_scan.pipeline import MAX_MERGED_SOURCE_CHARS, fair_share_merge_sources
 from app.services.storage.settings_store import load_runtime_settings
 # Imported at module level -- see the comment in api/v1/crawls.py for why.
 from app.workers.quick_scan_tasks import (
     quick_scan_override_task,
     run_quick_scan_identity_resolution_task,
+    run_quick_scan_source_check_task,
     run_quick_scan_task,
 )
 
@@ -84,19 +86,6 @@ async def _get_or_create_default_company(db: AsyncSession) -> Company:
     return company
 
 
-def _fair_share_merge(texts: list[str], max_chars: int) -> str:
-    """Multi-file/link merge for Stage 1's ~8k-token cap: naive concatenation
-    truncates from the end, so a single large source can silently push every
-    other source out entirely. Each source gets an equal share of the
-    budget up front instead, so every attached document/link is represented
-    in what Stage 1 actually sees."""
-    if not texts:
-        return ""
-    per_source_budget = max(max_chars // len(texts), 1)
-    return "\n\n---\n\n".join(text[:per_source_budget] for text in texts)
-
-
-_MAX_MERGED_CHARS = 8000 * 4  # matches stage1_extraction.py's own cap; this is a pre-truncation courtesy, not a second cap
 
 
 async def _gather_source_texts(files: list[UploadFile], source_urls: list[str]) -> list[str]:
@@ -170,14 +159,47 @@ async def start_quick_scan(
         await db.flush()
 
     if has_material:
-        source_text = _fair_share_merge(source_texts, _MAX_MERGED_CHARS)
+        non_empty_texts = [t for t in source_texts if t.strip()]
+        source_url = _normalize_url(source_urls[0]) if source_urls else None
+
+        if len(non_empty_texts) >= 2:
+            # 2+ real sources in one submission -- check whether they
+            # describe the same product before merging them (real incident:
+            # a different device's link + a different device's paper got
+            # silently blended into one confused analysis). Keeps every
+            # source's own text around (not just the merged blob) so
+            # resolve-source-conflict can re-merge only the chosen one(s).
+            analysis_run = AnalysisRun(
+                product_id=product.id,
+                analysis_type="quick_scan",
+                status=JobStatus.QUEUED,
+                input_snapshot_json={
+                    "per_source_texts": non_empty_texts,
+                    "source_url": source_url,
+                    "product_name_hint": name or None,
+                },
+            )
+            db.add(analysis_run)
+            await db.flush()
+            job = Job(job_type="quick_scan_source_check", status=JobStatus.QUEUED, related_id=analysis_run.id)
+            db.add(job)
+            await db.commit()
+            await db.refresh(job)
+            await db.refresh(analysis_run)
+            await enqueue_job(
+                db, job, run_quick_scan_source_check_task, str(job.id), str(analysis_run.id),
+                also_fail=[analysis_run],
+            )
+            return job
+
+        source_text = fair_share_merge_sources(non_empty_texts, MAX_MERGED_SOURCE_CHARS)
         analysis_run = AnalysisRun(
             product_id=product.id,
             analysis_type="quick_scan",
             status=JobStatus.QUEUED,
             input_snapshot_json={
                 "source_text": source_text,
-                "source_url": _normalize_url(source_urls[0]) if source_urls else None,
+                "source_url": source_url,
                 "product_name_hint": name or None,
             },
         )
@@ -287,6 +309,55 @@ async def confirm_candidate_site(
     analysis_run.error_summary = None
     if was_complete:
         analysis_run.revision += 1
+    db.add(analysis_run)
+    await db.flush()
+
+    job = Job(job_type="quick_scan", status=JobStatus.QUEUED, related_id=analysis_run.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    await db.refresh(analysis_run)
+
+    await enqueue_job(db, job, run_quick_scan_task, str(job.id), str(analysis_run.id), also_fail=[analysis_run])
+
+    return job
+
+
+@router.post("/quick-scans/{analysis_id}/resolve-source-conflict", response_model=JobRead, status_code=202)
+async def resolve_source_conflict(
+    analysis_id: uuid.UUID, payload: ResolveSourceConflictRequest, db: AsyncSession = Depends(get_db)
+) -> Job:
+    """Proceeds after a multi-source submission's divergence check paused at
+    AWAITING_CONFIRMATION with 2+ distinct products detected (see
+    _run_source_check in quick_scan_tasks.py). Re-merges only the chosen
+    group's own source texts (kept in input_snapshot_json.per_source_texts
+    since the initial submission) and hands off to the existing, unmodified
+    run_quick_scan_task -- the rest of the pipeline doesn't need to know
+    this run ever had more than one source."""
+    analysis_run = await db.get(AnalysisRun, analysis_id)
+    if analysis_run is None or analysis_run.analysis_type != "quick_scan":
+        raise HTTPException(status_code=404, detail="Quick scan not found")
+    if analysis_run.status != JobStatus.AWAITING_CONFIRMATION:
+        raise HTTPException(status_code=400, detail="This quick scan isn't awaiting a source-conflict resolution")
+
+    conflict = analysis_run.retrieval_bundle_json.get("source_conflict")
+    if not conflict:
+        raise HTTPException(status_code=400, detail="This quick scan has no detected source conflict to resolve")
+    groups = conflict.get("groups", [])
+    if payload.group_index < 0 or payload.group_index >= len(groups):
+        raise HTTPException(status_code=400, detail="Invalid group_index")
+
+    per_source_texts = analysis_run.input_snapshot_json.get("per_source_texts", [])
+    chosen_indices = groups[payload.group_index].get("source_indices", [])
+    chosen_texts = [per_source_texts[i] for i in chosen_indices if 0 <= i < len(per_source_texts)]
+    source_text = fair_share_merge_sources(chosen_texts, MAX_MERGED_SOURCE_CHARS)
+
+    analysis_run.input_snapshot_json = {
+        **analysis_run.input_snapshot_json,
+        "source_text": source_text,
+    }
+    analysis_run.status = JobStatus.QUEUED
+    analysis_run.error_summary = None
     db.add(analysis_run)
     await db.flush()
 

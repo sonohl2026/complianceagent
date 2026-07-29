@@ -34,6 +34,7 @@ _MODULE_PROMPT_FILES = {
     "quick_scan_code_candidates": "quick_scan_code_candidates.md",
     "quick_scan_code_refinement": "quick_scan_code_refinement.md",
     "quick_scan_code_relevance_gate": "quick_scan_code_relevance_gate.md",
+    "quick_scan_source_divergence": "quick_scan_source_divergence.md",
 }
 
 

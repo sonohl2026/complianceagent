@@ -145,6 +145,94 @@ async def test_multiple_maxlength_violations_all_fixed_by_truncation():
     assert all(len(item["detail"]) <= 20 for item in result.content["items"])
 
 
+def _raw_chat_response(raw_content: str, *, model="anthropic/claude-sonnet-4.5", finish_reason="stop") -> dict:
+    """Like _chat_response, but for a hand-crafted (possibly malformed) raw
+    content string -- used to simulate a response cut off mid-generation,
+    which _chat_response's dict-based helper can't produce since it always
+    json.dumps a valid object."""
+    return {
+        "id": "gen-123",
+        "model": model,
+        "choices": [{"message": {"role": "assistant", "content": raw_content}, "finish_reason": finish_reason}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+    }
+
+
+# --- finish_reason="length" retry (real incident: a response genuinely cut
+# off mid-generation isn't valid JSON at all, e.g. "Unterminated string" --
+# the repair path retries with the SAME max_tokens and asks the model to
+# regenerate the whole object, which fails the same way if the true required
+# length exceeds that budget) ---
+
+@respx.mock
+async def test_truncated_response_retries_with_larger_max_tokens_before_repair():
+    route = respx.post(CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_raw_chat_response('{"verdict": "STOP", "risk": "CRIT', finish_reason="length")),
+            httpx.Response(200, json=_chat_response({"verdict": "STOP", "risk": "CRITICAL"})),
+        ]
+    )
+    provider = _provider()
+    result = await provider.structured_completion(
+        system_prompt="sys", messages=[{"role": "user", "content": "go"}],
+        schema=SCHEMA, schema_name="test_schema", model="anthropic/claude-sonnet-4.5", max_tokens=100,
+    )
+    assert result.content == {"verdict": "STOP", "risk": "CRITICAL"}
+    # Recovered via the length-retry, not the LLM repair-with-integrity-guard
+    # path -- no "assistant"/repair-prompt round trip was needed.
+    assert result.schema_repair_attempted is False
+    assert route.call_count == 2
+    retried_call_max_tokens = json.loads(route.calls[1].request.content)["max_tokens"]
+    assert retried_call_max_tokens == 150  # 100 * 1.5
+
+
+@respx.mock
+async def test_malformed_response_with_normal_stop_goes_straight_to_repair():
+    # Same malformed content, but finish_reason="stop" -- the model finished
+    # normally despite emitting broken JSON, so this is NOT the truncation
+    # case; behavior must stay exactly as before (straight to LLM repair,
+    # no length-retry round trip).
+    route = respx.post(CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_raw_chat_response('{"verdict": "STOP", "risk": "CRIT', finish_reason="stop")),
+            httpx.Response(200, json=_chat_response({"verdict": "STOP", "risk": "CRITICAL"})),
+        ]
+    )
+    provider = _provider()
+    result = await provider.structured_completion(
+        system_prompt="sys", messages=[{"role": "user", "content": "go"}],
+        schema=SCHEMA, schema_name="test_schema", model="anthropic/claude-sonnet-4.5", max_tokens=100,
+    )
+    assert result.content == {"verdict": "STOP", "risk": "CRITICAL"}
+    assert result.schema_repair_attempted is True
+    assert route.call_count == 2
+    # The repair call is the same-budget "assistant"+repair-prompt shape,
+    # not a bigger max_tokens retry of the original messages.
+    assert json.loads(route.calls[1].request.content)["max_tokens"] == 100
+
+
+@respx.mock
+async def test_truncated_response_still_truncated_after_retry_falls_through_to_repair():
+    # The length-retry itself can also come back truncated -- must fall
+    # through to the normal repair path afterward, not retry a second time
+    # (allow_length_retry=False bounds it to one retry).
+    route = respx.post(CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_raw_chat_response('{"verdict": "STOP", "risk": "CRIT', finish_reason="length")),
+            httpx.Response(200, json=_raw_chat_response('{"verdict": "STOP", "risk": "MAJ', finish_reason="length")),
+            httpx.Response(200, json=_chat_response({"verdict": "STOP", "risk": "CRITICAL"})),
+        ]
+    )
+    provider = _provider()
+    result = await provider.structured_completion(
+        system_prompt="sys", messages=[{"role": "user", "content": "go"}],
+        schema=SCHEMA, schema_name="test_schema", model="anthropic/claude-sonnet-4.5", max_tokens=100,
+    )
+    assert result.content == {"verdict": "STOP", "risk": "CRITICAL"}
+    assert result.schema_repair_attempted is True
+    assert route.call_count == 3
+
+
 @respx.mock
 async def test_enum_violation_not_truncation_fixable_falls_through_to_repair():
     respx.post(CHAT_URL).mock(

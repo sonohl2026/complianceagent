@@ -32,6 +32,73 @@ interface CandidateSite {
   snippet: string;
 }
 
+interface SourceGroup {
+  product_name: string;
+  manufacturer: string;
+  source_indices: number[];
+}
+
+interface SourceConflict {
+  groups: SourceGroup[];
+}
+
+/** Shown instead of the usual identity-confirmation UI when 2+ attached
+ * sources were detected to describe different products (see
+ * source_divergence.py / quick_scan_tasks.py::_run_source_check). Picking
+ * a group re-merges only that group's own sources and proceeds through the
+ * normal pipeline -- everything else about this run behaves exactly like a
+ * single-source submission from here on. */
+function SourceConflictPanel({ run, conflict }: { run: AnalysisRun; conflict: SourceConflict }) {
+  const queryClient = useQueryClient();
+
+  const resolve = useMutation({
+    mutationFn: (groupIndex: number) =>
+      api.post(`/quick-scans/${run.id}/resolve-source-conflict`, { group_index: groupIndex }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["analysis", run.id] });
+      if (run.product_id) {
+        queryClient.invalidateQueries({ queryKey: ["analysis", "latest-for-product", run.product_id] });
+      }
+    },
+  });
+
+  return (
+    <div className="rounded border border-slate-200 dark:border-slate-800 p-5 space-y-4 max-w-2xl">
+      <div>
+        <h3 className="text-sm font-semibold">Which product do you want to analyze?</h3>
+        <p className="text-xs text-slate-500 mt-1">
+          The sources you attached look like they describe more than one distinct product. Pick
+          the one you want this run to focus on -- the other source(s) won't be used.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {conflict.groups.map((group, i) => (
+          <div key={i} className="rounded border border-slate-200 dark:border-slate-800 p-3 space-y-2">
+            <div>
+              <p className="text-sm font-semibold">{group.product_name}</p>
+              <p className="text-xs text-slate-500">{group.manufacturer || "Manufacturer unknown"}</p>
+              <p className="text-xs text-slate-400 mt-1">
+                From attached source{group.source_indices.length > 1 ? "s" : ""}{" "}
+                {group.source_indices.map((idx) => idx + 1).join(", ")}
+              </p>
+            </div>
+            <button
+              disabled={resolve.isPending}
+              onClick={() => resolve.mutate(i)}
+              className="text-sm rounded bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 px-4 py-2 disabled:opacity-50"
+            >
+              {resolve.isPending ? "Analyzing…" : `Analyze ${group.product_name}`}
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {resolve.isError && <p className="text-xs text-risk-critical">{(resolve.error as Error).message}</p>}
+    </div>
+  );
+}
+
 function recordLabel(sourceName: string, source: RetrievalSource): { type: string; number: string | null } {
   const type = SOURCE_LABELS[sourceName] ?? sourceName;
   const document = source.data?.document ?? {};
@@ -42,11 +109,24 @@ function recordLabel(sourceName: string, source: RetrievalSource): { type: strin
   return { type, number: null };
 }
 
+/** Dispatches to whichever confirmation UI this paused run actually needs --
+ * a source conflict (2+ attached sources describing different products) vs.
+ * the usual name-only identity confirmation. Kept as a plain dispatcher with
+ * no hooks of its own so each branch's hooks stay unconditional within
+ * their own component (React's rules of hooks). */
+export function ConfirmationPanel({ run }: { run: AnalysisRun }) {
+  const sourceConflict = run.retrieval_bundle_json.source_conflict as SourceConflict | undefined;
+  if (sourceConflict) {
+    return <SourceConflictPanel run={run} conflict={sourceConflict} />;
+  }
+  return <IdentityConfirmationPanel run={run} />;
+}
+
 /** MVP lockdown Step 3: shown when a name-only submission has paused at
  * AWAITING_CONFIRMATION after retrieval, before the (expensive, hard-to-undo)
  * Stage 3 synthesis call. Reuses ProductIdentityEdit verbatim -- same
  * mechanism as a post-completion correction, just surfaced mid-run. */
-export function ConfirmationPanel({ run }: { run: AnalysisRun }) {
+function IdentityConfirmationPanel({ run }: { run: AnalysisRun }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
 

@@ -18,15 +18,16 @@ from app.services.quick_scan.schemas import QuickScanAssessment
 from app.services.quick_scan.stage1_extraction import UsageCallback, wrap_untrusted_data
 from app.services.quick_scan.schemas import Stage1Extraction
 
-_MAX_OUTPUT_TOKENS = 2500  # Right-sized after schemas.py's Pillar.detail/gap
-# tightening (finding/detail/gap now carry real max_length constraints, not
-# just description-text hints -- see schemas.py). Measured completion_tokens
-# post-tightening across 4 real fixtures: 1519-1896 (was 2236-2542 pre-
-# tightening on the same/comparable fixtures, ~17% reduction). 2500 gives
-# ~30% headroom above the observed max, well below the 3000 that itself
-# followed a real truncation incident (fixture 4, see git history) -- if
-# output size grows again later (e.g. more evidence sources added), re-
-# measure before assuming this margin still holds.
+_MAX_OUTPUT_TOKENS = 3500  # Was 2500 (see git history for that measurement),
+# raised after a real production failure: a submission with more attached
+# material (two sources merged, ~20K chars) produced a response that got cut
+# off mid-generation, which openrouter_provider.py's JSONDecodeError path
+# couldn't recover from at the time (see that file's own finish_reason=
+# "length" retry, added alongside this bump as the other half of the fix).
+# 3500 gives real margin above the highest completion_tokens actually
+# observed across this app's real runs (2067) -- if output size grows again
+# later (e.g. more evidence sources added), re-measure before assuming this
+# margin still holds.
 _MAX_EVIDENCE_BLOCK_CHARS = 1500 * 4  # ~1,500 tokens at ~4 chars/token, per source
 _MAX_UPLOADED_DOCUMENT_CHARS = 8000 * 4  # matches Stage 1's own truncation budget
 

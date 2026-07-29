@@ -23,6 +23,16 @@ class OverrideRequest(BaseModel):
     overrides: list[OverrideItem]
 
 
+class ResolveSourceConflictRequest(BaseModel):
+    """Picks which detected product group to proceed with, after a
+    multi-source submission's divergence check found 2+ distinct products
+    among the attached sources (see
+    quick_scan_tasks.py::_run_source_check and
+    source_divergence.py::check_source_divergence)."""
+
+    group_index: int
+
+
 class ConfirmSiteRequest(BaseModel):
     """Confirms a candidate site -- either the one the web-search fallback
     proposed on a name-only submission's zero-hit (see

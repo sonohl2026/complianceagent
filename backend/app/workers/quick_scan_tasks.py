@@ -13,10 +13,14 @@ from app.models.product import Product
 from app.services.llm.base import LLMProviderError, LLMValidationError
 from app.services.llm.openrouter_provider import OpenRouterProvider
 from app.services.quick_scan.pipeline import (
+    MAX_MERGED_SOURCE_CHARS,
+    fair_share_merge_sources,
+    make_usage_recorder,
     run_quick_scan,
     run_quick_scan_identity_resolution,
     run_quick_scan_override,
 )
+from app.services.quick_scan.source_divergence import check_source_divergence
 from app.services.quick_scan.stage3_synthesis import QuickScanSynthesisError
 from app.services.storage.settings_store import load_runtime_settings
 from app.workers.celery_app import celery_app
@@ -39,6 +43,11 @@ def quick_scan_override_task(job_id: str, analysis_run_id: str) -> None:
 @celery_app.task(name="quick_scan.resolve_identity")
 def run_quick_scan_identity_resolution_task(job_id: str, analysis_run_id: str, product_name: str) -> None:
     asyncio.run(_run_identity_resolution(job_id, analysis_run_id, product_name))
+
+
+@celery_app.task(name="quick_scan.source_check")
+def run_quick_scan_source_check_task(job_id: str, analysis_run_id: str) -> None:
+    asyncio.run(_run_source_check(job_id, analysis_run_id))
 
 
 async def _run_identity_resolution(job_id: str, analysis_run_id: str, product_name: str) -> None:
@@ -107,6 +116,37 @@ async def _run_identity_resolution(job_id: str, analysis_run_id: str, product_na
         await engine.dispose()
 
 
+async def _complete_pipeline_run(db: AsyncSession, job: Job, analysis_run: AnalysisRun, run_pipeline) -> None:
+    """Shared RUNNING(already set)->COMPLETE/FAILED bookkeeping for a full
+    quick_scan pipeline call. run_pipeline is a zero-arg async callable
+    (not an already-constructed coroutine) so LLM-provider construction
+    failures stay inside this same try/except, matching the original
+    inline behavior exactly. Used by both the normal first-run path and
+    the source-check task's no-divergence branch, so both share one
+    COMPLETE/FAILED/cost-tracking guarantee instead of two copies of it."""
+    try:
+        await run_pipeline()
+        job.status = JobStatus.COMPLETE
+        job.progress_percent = 100
+        job.current_stage = "complete"
+        analysis_run.status = JobStatus.COMPLETE
+        await _sync_product_name_from_result(db, analysis_run)
+    except _FAILURE_EXCEPTIONS as exc:
+        job.status = JobStatus.FAILED
+        job.error_summary = str(exc)
+        analysis_run.status = JobStatus.FAILED
+        analysis_run.error_summary = str(exc)
+    except Exception as exc:  # noqa: BLE001 - surface any unexpected pipeline failure
+        job.status = JobStatus.FAILED
+        job.error_summary = f"Unexpected error: {exc}"
+        analysis_run.status = JobStatus.FAILED
+        analysis_run.error_summary = f"Unexpected error: {exc}"
+    finally:
+        job.completed_at = datetime.now(timezone.utc)
+        analysis_run.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+
 async def _run(job_id: str, analysis_run_id: str, *, override: bool) -> None:
     engine, SessionLocal = create_worker_engine_and_sessionmaker()
     try:
@@ -125,7 +165,7 @@ async def _run(job_id: str, analysis_run_id: str, *, override: bool) -> None:
             runtime_settings = load_runtime_settings()
             model = runtime_settings.get("openrouter_model") or ""
 
-            try:
+            async def run_pipeline() -> None:
                 llm = OpenRouterProvider(
                     api_key=runtime_settings.get("openrouter_api_key"),
                     prompt_caching=runtime_settings.get("openrouter_prompt_caching", True),
@@ -136,25 +176,98 @@ async def _run(job_id: str, analysis_run_id: str, *, override: bool) -> None:
                     source_text = analysis_run.input_snapshot_json.get("source_text", "")
                     name_hint = analysis_run.input_snapshot_json.get("product_name_hint")
                     await run_quick_scan(db, analysis_run, llm, model, source_text, product_name_hint=name_hint)
-                job.status = JobStatus.COMPLETE
-                job.progress_percent = 100
-                job.current_stage = "complete"
-                analysis_run.status = JobStatus.COMPLETE
-                await _sync_product_name_from_result(db, analysis_run)
+
+            await _complete_pipeline_run(db, job, analysis_run, run_pipeline)
+    finally:
+        await engine.dispose()
+
+
+async def _run_source_check(job_id: str, analysis_run_id: str) -> None:
+    """Multi-source submission's first half (2+ real sources attached in
+    one composer submission): checks whether they describe the same
+    product before committing to the expensive full pipeline. Mirrors
+    _run_identity_resolution's RUNNING->terminal-state split -- but unlike
+    that task, the common/correct outcome (sources agree) runs the ordinary
+    pipeline inline to COMPLETE/FAILED with no visible pause; only a
+    genuine conflict (2+ distinct products detected) pauses at
+    AWAITING_CONFIRMATION, job COMPLETE, for the user to pick one (see
+    quick_scans.py::resolve_source_conflict)."""
+    engine, SessionLocal = create_worker_engine_and_sessionmaker()
+    try:
+        async with SessionLocal() as db:
+            job = await db.get(Job, uuid.UUID(job_id))
+            analysis_run = await db.get(AnalysisRun, uuid.UUID(analysis_run_id))
+            if job is None or analysis_run is None:
+                return
+
+            job.status = JobStatus.RUNNING
+            job.started_at = datetime.now(timezone.utc)
+            analysis_run.status = JobStatus.RUNNING
+            analysis_run.started_at = datetime.now(timezone.utc)
+            await db.commit()
+
+            runtime_settings = load_runtime_settings()
+            model = runtime_settings.get("openrouter_model") or ""
+            per_source_texts = analysis_run.input_snapshot_json.get("per_source_texts", [])
+
+            try:
+                llm = OpenRouterProvider(
+                    api_key=runtime_settings.get("openrouter_api_key"),
+                    prompt_caching=runtime_settings.get("openrouter_prompt_caching", True),
+                )
+                record_usage = make_usage_recorder(db, analysis_run)
+                divergence = await check_source_divergence(llm, model, per_source_texts, on_usage=record_usage)
             except _FAILURE_EXCEPTIONS as exc:
                 job.status = JobStatus.FAILED
                 job.error_summary = str(exc)
                 analysis_run.status = JobStatus.FAILED
                 analysis_run.error_summary = str(exc)
-            except Exception as exc:  # noqa: BLE001 - surface any unexpected pipeline failure
+                job.completed_at = datetime.now(timezone.utc)
+                analysis_run.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                return
+            except Exception as exc:  # noqa: BLE001 - surface any unexpected divergence-check failure
                 job.status = JobStatus.FAILED
                 job.error_summary = f"Unexpected error: {exc}"
                 analysis_run.status = JobStatus.FAILED
                 analysis_run.error_summary = f"Unexpected error: {exc}"
-            finally:
                 job.completed_at = datetime.now(timezone.utc)
                 analysis_run.completed_at = datetime.now(timezone.utc)
                 await db.commit()
+                return
+
+            if divergence.diverges and len(divergence.groups) >= 2:
+                analysis_run.retrieval_bundle_json = {
+                    **analysis_run.retrieval_bundle_json,
+                    "source_conflict": {"groups": [g.model_dump() for g in divergence.groups]},
+                }
+                job.status = JobStatus.COMPLETE
+                job.progress_percent = 100
+                job.current_stage = "awaiting_confirmation"
+                analysis_run.status = JobStatus.AWAITING_CONFIRMATION
+                job.completed_at = datetime.now(timezone.utc)
+                # AWAITING_CONFIRMATION is a pause, not a terminal state --
+                # analysis_run.completed_at stays unset, same as
+                # _run_identity_resolution.
+                await db.commit()
+                return
+
+            # No divergence (the common, correct case -- e.g. a web link and
+            # an academic paper about the SAME device) -- merge everything
+            # and run the ordinary pipeline inline, exactly like a normal
+            # has-material submission. No visible pause for the user.
+            source_text = fair_share_merge_sources(per_source_texts, MAX_MERGED_SOURCE_CHARS)
+            analysis_run.input_snapshot_json = {**analysis_run.input_snapshot_json, "source_text": source_text}
+
+            async def run_pipeline() -> None:
+                llm = OpenRouterProvider(
+                    api_key=runtime_settings.get("openrouter_api_key"),
+                    prompt_caching=runtime_settings.get("openrouter_prompt_caching", True),
+                )
+                name_hint = analysis_run.input_snapshot_json.get("product_name_hint")
+                await run_quick_scan(db, analysis_run, llm, model, source_text, product_name_hint=name_hint)
+
+            await _complete_pipeline_run(db, job, analysis_run, run_pipeline)
     finally:
         await engine.dispose()
 

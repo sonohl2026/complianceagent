@@ -28,6 +28,9 @@ MAX_RETRIES = 3
 BASE_BACKOFF_SECONDS = 1.5
 _MAX_TRUNCATION_ITERATIONS = 10  # generous headroom above the ~6 length-capped
 # string fields a real quick_scan response can have; just a loop-safety cap.
+_TRUNCATION_RETRY_MULTIPLIER = 1.5  # how much more budget to give a response
+# that got cut off mid-generation (finish_reason == "length") before falling
+# back to the same-budget repair path, which would otherwise fail the same way.
 
 
 def _truncate_to_word_boundary(text: str, max_length: int) -> str:
@@ -171,11 +174,46 @@ class OpenRouterProvider:
             max_tokens=max_tokens,
             extra_body=extra_body,
         )
+        return await self._parse_or_recover(
+            result, full_messages, response_format, schema, schema_name, model, temperature, max_tokens,
+            extra_body, allow_length_retry=True,
+        )
 
+    async def _parse_or_recover(
+        self, result, full_messages, response_format, schema, schema_name, model, temperature, max_tokens,
+        extra_body, *, allow_length_retry: bool,
+    ) -> LLMResult:
         try:
             parsed = self._parse_and_validate(result, schema)
             return self._to_llm_result(result, parsed, model, schema_repair_attempted=False)
         except json.JSONDecodeError as exc:
+            # A response that got cut off mid-generation isn't valid JSON at
+            # all -- e.g. an "unterminated string". finish_reason == "length"
+            # is the authoritative signal that the PROVIDER truncated it
+            # (not the model emitting malformed JSON despite finishing
+            # normally). Real incident this fixes: the repair path below
+            # retries with the SAME max_tokens budget and asks the model to
+            # regenerate the whole object again -- if the true required
+            # length exceeds that budget, the repair attempt fails the exact
+            # same way, producing an unrecoverable "failed twice". Retrying
+            # the ORIGINAL call once with more room, before ever reaching
+            # that repair path, actually addresses the cause. allow_length_
+            # retry=False on the recursive call bounds this to one retry.
+            finish_reason = result.choices[0].finish_reason if result.choices else None
+            if allow_length_retry and finish_reason == "length":
+                retried_max_tokens = int(max_tokens * _TRUNCATION_RETRY_MULTIPLIER)
+                logger.info(
+                    "%s response truncated at max_tokens=%d (finish_reason=length); retrying with max_tokens=%d",
+                    schema_name, max_tokens, retried_max_tokens,
+                )
+                retried_result = await self._call_with_retry(
+                    model=model, messages=full_messages, response_format=response_format,
+                    temperature=temperature, max_tokens=retried_max_tokens, extra_body=extra_body,
+                )
+                return await self._parse_or_recover(
+                    retried_result, full_messages, response_format, schema, schema_name, model, temperature,
+                    max_tokens, extra_body, allow_length_retry=False,
+                )
             # Not even valid JSON -- nothing to truncate-fix and no baseline
             # to diff a repair against; straight to the LLM repair fallback.
             return await self._repair_with_integrity_guard(

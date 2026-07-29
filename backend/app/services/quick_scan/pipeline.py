@@ -21,6 +21,22 @@ from app.services.quick_scan.stage3_synthesis import run_stage3
 from app.services.storage.settings_store import load_runtime_settings
 from app.services.web_search.brave_client import BraveSearchError, WebSearchResult, search as brave_search
 
+MAX_MERGED_SOURCE_CHARS = 8000 * 4  # matches stage1_extraction.py's own cap; this is a pre-truncation courtesy, not a second cap
+
+
+def fair_share_merge_sources(texts: list[str], max_chars: int) -> str:
+    """Multi-file/link merge for Stage 1's ~8k-token cap: naive concatenation
+    truncates from the end, so a single large source can silently push every
+    other source out entirely. Each source gets an equal share of the
+    budget up front instead, so every attached document/link is represented
+    in what Stage 1 actually sees. Shared by the API layer (quick_scans.py)
+    and the worker (quick_scan_tasks.py's source-check task), which is why
+    this lives here rather than in either of those."""
+    if not texts:
+        return ""
+    per_source_budget = max(max_chars // len(texts), 1)
+    return "\n\n---\n\n".join(text[:per_source_budget] for text in texts)
+
 
 async def _add_fee_schedule_evidence(
     llm: LLMProvider, extraction_model: str, stage1: Stage1Extraction, bundle: EvidenceBundle,
@@ -53,7 +69,7 @@ def _evidence_to_dict(evidence: SourceEvidence) -> dict:
     }
 
 
-def _make_usage_recorder(db: AsyncSession, analysis_run: AnalysisRun):
+def make_usage_recorder(db: AsyncSession, analysis_run: AnalysisRun):
     # Mirrors app/services/analysis/pipeline.py's _stage_call token/cost
     # bookkeeping, applied via run_stage1/run_stage3's optional on_usage
     # callback instead of changing their return type (which test/bench
@@ -119,7 +135,7 @@ async def run_quick_scan(
     extraction_model = settings.get("openrouter_extraction_model") or model
     synthesis_model = settings.get("openrouter_synthesis_model") or model
 
-    record_usage = _make_usage_recorder(db, analysis_run)
+    record_usage = make_usage_recorder(db, analysis_run)
 
     analysis_run.current_stage = "stage1_extraction"
     await db.commit()
@@ -177,7 +193,7 @@ async def run_quick_scan_override(db: AsyncSession, analysis_run: AnalysisRun, l
     synthesis_model = settings.get("openrouter_synthesis_model") or model
     extraction_model = settings.get("openrouter_extraction_model") or model
 
-    record_usage = _make_usage_recorder(db, analysis_run)
+    record_usage = make_usage_recorder(db, analysis_run)
 
     prior_stage1_data = analysis_run.retrieval_bundle_json.get("stage1", {})
     stage1 = Stage1Extraction.model_validate(prior_stage1_data)
@@ -265,7 +281,7 @@ async def run_quick_scan_identity_resolution(
     settings = load_runtime_settings()
     extraction_model = settings.get("openrouter_extraction_model") or model
 
-    record_usage = _make_usage_recorder(db, analysis_run)
+    record_usage = make_usage_recorder(db, analysis_run)
     stage1 = _seed_stage1_from_name(product_name)
 
     analysis_run.current_stage = "retrieval"
