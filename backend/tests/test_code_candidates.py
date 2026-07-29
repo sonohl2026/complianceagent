@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from app.services.evidence_retrieval.orchestrator import EvidenceBundle
@@ -317,3 +319,27 @@ async def test_resolve_fee_schedule_evidence_always_considers_known_generic_fami
     evidence = await resolve_fee_schedule_evidence(llm, "fake-model", stage1, bundle, table=_TEST_TABLE)
     assert evidence.status == RetrievalStatus.HIT
     assert {c["code"] for c in evidence.data["verified_codes"]} == set(_KNOWN_GENERIC_CANDIDATE_FAMILIES)
+
+
+# --- lazy-fill on first use (real incident: ensure_pfs_populated existed
+# specifically for "a fresh install's cache shouldn't stay empty until the
+# weekly refresh happens to run", but was only ever wired into the internal
+# benchmark harness, never the real pipeline a deployed app actually runs)
+
+async def test_resolve_fee_schedule_evidence_lazy_fills_the_real_pfs_table():
+    with patch("app.services.quick_scan.code_candidates.ensure_pfs_populated", new=AsyncMock()) as mock_ensure:
+        llm = _FakeCandidateLLM([])
+        bundle = EvidenceBundle(sources={}, all_openfda_failed=False, all_cms_failed=False)
+        await resolve_fee_schedule_evidence(llm, "fake-model", _stage1(), bundle, table="pfs")
+    mock_ensure.assert_awaited_once()
+
+
+async def test_resolve_fee_schedule_evidence_never_lazy_fills_a_test_table():
+    # A test's own isolated table name must never trigger a real network
+    # call to CMS -- ensure_pfs_populated always refreshes into the literal
+    # "pfs" table, so it must only fire when that's genuinely the table in use.
+    with patch("app.services.quick_scan.code_candidates.ensure_pfs_populated", new=AsyncMock()) as mock_ensure:
+        llm = _FakeCandidateLLM([])
+        bundle = EvidenceBundle(sources={}, all_openfda_failed=False, all_cms_failed=False)
+        await resolve_fee_schedule_evidence(llm, "fake-model", _stage1(), bundle, table=_TEST_TABLE)
+    mock_ensure.assert_not_awaited()

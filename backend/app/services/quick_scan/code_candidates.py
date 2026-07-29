@@ -29,11 +29,14 @@ step below -- none of them is trusted on its own:
 
 import re
 
+import httpx
+
 from app.services.analysis.prompts_service import load_module_prompt
 from app.services.evidence_retrieval.orchestrator import EvidenceBundle
 from app.services.evidence_retrieval.types import RetrievalStatus, SourceEvidence
 from app.services.fee_schedule import cache, description_search
 from app.services.fee_schedule.code_format import CodeFormat, classify_code_format
+from app.services.fee_schedule.refresh import ensure_pfs_populated
 from app.services.fee_schedule.types import FeeScheduleEntry
 from app.services.llm.base import LLMProvider
 from app.services.quick_scan.schemas import CandidateCodesResponse, Stage1Extraction
@@ -223,6 +226,24 @@ async def resolve_fee_schedule_evidence(
     llm: LLMProvider, model: str, stage1: Stage1Extraction, bundle: EvidenceBundle, table: str = "pfs",
     on_usage: UsageCallback | None = None,
 ) -> SourceEvidence:
+    if table == "pfs":
+        # Real incident this fixes: ensure_pfs_populated existed specifically
+        # for "the very first quick_scan run after deploy doesn't just get
+        # MISS on every code until the weekly scheduled refresh happens to
+        # run" (refresh.py's own docstring) -- but it was only ever wired
+        # into the internal benchmark harness, never into the real pipeline
+        # a deployed app actually runs. A fresh install's fee-schedule cache
+        # stayed permanently empty (silent -- refresh_pfs never raises) until
+        # someone happened to trigger the weekly Celery Beat task manually.
+        # A single cheap Redis read (last_refreshed_at) on every call once
+        # already populated; only the very first call after a fresh install
+        # pays the real download+parse cost. Guarded to table == "pfs"
+        # specifically since ensure_pfs_populated always refreshes into that
+        # exact table name -- a test's own isolated table must never trigger
+        # a real network call.
+        async with httpx.AsyncClient() as client:
+            await ensure_pfs_populated(client)
+
     sourced_hints = _sourced_hints_from_bundle(bundle)
     llm_candidates = await propose_llm_candidates(llm, model, stage1, sourced_hints, on_usage=on_usage)
     description_matches = await _description_matched_candidates(llm, model, stage1, table, on_usage=on_usage)
