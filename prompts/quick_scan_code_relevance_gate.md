@@ -15,8 +15,23 @@ guess or a coincidental keyword overlap, not a genuine match.
 
 ## Task
 
-Pick only the codes that plausibly apply to THIS device's actual procedure,
-service, or supply — not just the same general body system or specialty.
+Before judging any individual code, first check whether this device is even
+eligible for a medical billing code AT ALL. A device explicitly positioned as
+consumer/wellness-only, marketed toward athletes/coaches/general fitness use
+rather than patients or clinical care, or explicitly disclaiming medical use
+or FDA regulation has NO billing pathway — reject every single candidate in
+that case, no matter how well any code's criteria might otherwise seem to
+match. This applies even to the generic/parameter-agnostic codes described
+below: their general criteria (e.g. "any device that transmits physiologic
+data") are necessary but not sufficient — a fitness tracker that transmits
+heart-rate data is not a medical device just because it technically fits that
+description. Only proceed to the modality-specific vs. generic-family
+reasoning below once you're confident this is a genuine clinical/medical
+device, not a consumer product.
+
+Once past that threshold, pick only the codes that plausibly apply to THIS
+device's actual procedure, service, or supply — not just the same general
+body system or specialty.
 
 Two different kinds of code families need different tests:
 - **Modality-specific codes** (e.g. an electrocardiogram/ECG interpretation
