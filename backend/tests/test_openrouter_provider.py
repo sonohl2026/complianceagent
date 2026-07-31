@@ -35,6 +35,27 @@ def _provider(prompt_caching: bool = True) -> OpenRouterProvider:
     return OpenRouterProvider(api_key="sk-or-test-key", prompt_caching=prompt_caching)
 
 
+# --- empty/missing choices (real incident: a rare OpenRouter/upstream-
+# provider anomaly returned a 200 OK whose response had choices=None,
+# raising an unhandled 'NoneType' object is not subscriptable instead of a
+# clean, typed, retryable failure) ---
+
+@respx.mock
+async def test_response_with_no_choices_raises_clean_provider_error():
+    respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json={
+            "id": "gen-123", "model": "anthropic/claude-sonnet-4.5", "choices": None,
+            "usage": {"prompt_tokens": 100, "completion_tokens": 0, "total_tokens": 100},
+        })
+    )
+    provider = _provider()
+    with pytest.raises(LLMProviderError):
+        await provider.structured_completion(
+            system_prompt="sys", messages=[{"role": "user", "content": "go"}],
+            schema=SCHEMA, schema_name="test_schema", model="anthropic/claude-sonnet-4.5",
+        )
+
+
 # --- prompt caching (previously a fully inert setting -- see
 # openrouter_provider.py's constructor comment; confirmed via 9 real Stage-3
 # calls all reporting cached_tokens=0 despite an identical, large system

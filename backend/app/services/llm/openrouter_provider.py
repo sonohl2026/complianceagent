@@ -408,6 +408,21 @@ class OpenRouterProvider:
 
     @staticmethod
     def _parse_and_validate(response, schema: dict) -> dict:
+        # Real incident this fixes: a rare OpenRouter/upstream-provider
+        # anomaly can return a 200 OK whose parsed response has choices=None
+        # (not a standard HTTP error status _call_with_retry's own handling
+        # catches). Unguarded, response.choices[0] then raises a raw
+        # 'NoneType' object is not subscriptable -- an unhandled TypeError,
+        # not one of this app's own typed exceptions, so it surfaces to the
+        # user as an unhelpful generic error instead of a clean, retryable
+        # failure. Converting it to LLMProviderError here means it's caught
+        # by the exact same _FAILURE_EXCEPTIONS handling every other
+        # provider-level failure already goes through.
+        if not response.choices:
+            raise LLMProviderError(
+                "OpenRouter returned no choices in its response -- this usually indicates a "
+                "transient provider-side issue. Try running the scan again."
+            )
         raw_content = response.choices[0].message.content or ""
         parsed = json.loads(raw_content)
         jsonschema.validate(instance=parsed, schema=schema)
